@@ -29,6 +29,7 @@
 #include <linux/remoteproc.h>
 #include <linux/mailbox_client.h>
 #include <linux/omap-mailbox.h>
+#include <linux/string.h>
 
 #include <linux/platform_data/remoteproc-pruss.h>
 
@@ -800,6 +801,45 @@ static const struct pru_private_data *pru_rproc_get_private_data(
 	return NULL;
 }
 
+static ssize_t pru_rproc_fwname_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int ret;
+	struct platform_device *pdev = to_platform_device(dev);
+	struct rproc *rproc = platform_get_drvdata(pdev);
+	struct pru_rproc *pru = rproc->priv;
+	const char *default_fwname = rproc->firmware;
+	
+	/*Assign firmware name provided by user*/
+	rproc->firmware = (char *)buf;
+	
+	if (list_empty(&pru->rproc->rvdevs)) {
+		dev_info(dev, "Booting the PRU core manually\n");
+		ret = rproc_boot(pru->rproc);
+		if (ret) {
+			dev_err(dev, "rproc_boot failed.Trying with default firmware file\n");
+			rproc->firmware = default_fwname;
+			ret = rproc_boot(pru->rproc);
+			if(ret){
+				dev_err(dev, "rproc_boot has failed");
+			}
+		}
+	}
+
+	return count;
+}
+
+static DEVICE_ATTR(fwname, S_IWUSR | S_IRUGO,
+NULL, pru_rproc_fwname_store);
+
+static struct attribute *pru_rproc_attributes[] = {
+	&dev_attr_fwname.attr,
+	NULL
+};
+static struct attribute_group pru_rproc_attr_group = {
+	.attrs = pru_rproc_attributes
+};
+
 static int pru_rproc_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -812,6 +852,13 @@ static int pru_rproc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int i, ret;
 	const char *mem_names[PRU_MEM_MAX] = { "iram", "control", "debug" };
+
+	/*Create sysfs entry*/
+	ret = sysfs_create_group(&dev->kobj, &pru_rproc_attr_group);
+	if (ret) {
+		dev_err(dev, "Failed to create sysfs entries.\n");
+		return ret;
+	}
 
 	if (!np) {
 		dev_err(dev, "Non-DT platform device not supported\n");
@@ -892,14 +939,6 @@ static int pru_rproc_probe(struct platform_device *pdev)
 	 * the remoteproc core is done with loading the firmware image.
 	 */
 	wait_for_completion(&pru->rproc->firmware_loading_complete);
-	if (list_empty(&pru->rproc->rvdevs)) {
-		dev_info(dev, "booting the PRU core manually\n");
-		ret = rproc_boot(pru->rproc);
-		if (ret) {
-			dev_err(dev, "rproc_boot failed\n");
-			goto del_rproc;
-		}
-	}
 
 	/* suppress unused function warning */
 	(void) pru_trigger_interrupt;
@@ -908,8 +947,6 @@ static int pru_rproc_probe(struct platform_device *pdev)
 
 	return 0;
 
-del_rproc:
-	rproc_del(pru->rproc);
 put_mbox:
 	mbox_free_channel(pru->mbox);
 free_rproc:
@@ -930,6 +967,8 @@ static int pru_rproc_remove(struct platform_device *pdev)
 		rproc_shutdown(pru->rproc);
 	}
 
+	/* Remove sysfs attributes */
+	sysfs_remove_group(&dev->kobj, &pru_rproc_attr_group);
 	mbox_free_channel(pru->mbox);
 
 	rproc_del(rproc);
@@ -1341,7 +1380,7 @@ static const struct of_device_id pruss_of_match[] = {
 	{ .compatible = "ti,am5728-pruss", .data = &am5728_match_data, },
 	{},
 };
-MODULE_DEVICE_TABLE(of, pruss_of_match);
+//MODULE_DEVICE_TABLE(of, pruss_of_match);
 
 static struct platform_driver pruss_driver = {
 	.driver = {
