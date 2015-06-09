@@ -29,8 +29,7 @@
 #include <linux/remoteproc.h>
 #include <linux/mailbox_client.h>
 #include <linux/omap-mailbox.h>
-#include <linux/string.h>
-
+#include <asm/io.h>
 #include <linux/platform_data/remoteproc-pruss.h>
 
 #include "remoteproc_internal.h"
@@ -171,7 +170,19 @@ struct pruss_match_private_data {
 };
 
 struct pru_rproc;
-
+/**
+ * struct pruss_message - Structure to store message info
+ * @mem_type - type of PRU memory to perform operation on (Ex DRAM0)
+ * @offset - wodr offset in memory
+ * @data_size - size of data in bytes
+ * @data_buf - data buffer to carry data
+ */
+struct pruss_message {
+	unsigned int mem_type;
+	unsigned int offset;
+	size_t data_size;
+	u32 *data_buf;
+};
 /**
  * struct pruss - PRUSS parent structure
  * @pdev: platform device
@@ -192,6 +203,7 @@ struct pruss {
 	int *irqs;
 	int sysev_to_ch[MAX_PRU_SYS_EVENTS];
 	int ch_to_host[MAX_PRU_CHANNELS];
+	struct pruss_message *msg,*last_msg;
 };
 
 /**
@@ -448,6 +460,32 @@ static void pru_rproc_create_debug_entries(struct rproc *rproc)
 			    rproc, &pru_rproc_debug_ss_fops);
 }
 
+static int pruss_write(struct device *dev)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct pruss *pruss = platform_get_drvdata(pdev);
+	int offset = pruss->msg->offset;
+	
+	if(pruss->msg->mem_type !=PRUSS_MEM_DRAM0 && 
+	   pruss->msg->mem_type !=PRUSS_MEM_DRAM1 && 
+	   pruss->msg->mem_type !=PRUSS_MEM_SHRD_RAM2) {
+		dev_err(dev, "Invalid memory type");
+		return -EINVAL;
+	}
+
+	if((pruss->msg->mem_type == PRUSS_MEM_DRAM0 && offset > 2047) ||
+	   (pruss->msg->mem_type == PRUSS_MEM_DRAM1 && offset > 2047) ||
+	   (pruss->msg->mem_type == PRUSS_MEM_SHRD_RAM2 && offset > 3071)) {
+		dev_err(dev, "Offset too large");
+		return -EINVAL;
+	}
+	/* Finally write to iomem of PRU */
+	memcpy_toio(pruss->mem_va[pruss->msg->mem_type], pruss->msg->data_buf, pruss->msg->data_size);
+	/* Stash last sent message */
+	pruss->last_msg = pruss->msg;
+	return 0;
+}
+
 static void pruss_init_intc(struct pruss *pruss)
 {
 	int i;
@@ -590,7 +628,7 @@ static void pru_rproc_mbox_callback(struct mbox_client *client, void *data)
 
 	/* msg contains the index of the triggered vring */
 	if (rproc_vq_interrupt(pru->rproc, msg) == IRQ_NONE)
-		dev_err(dev, "no message was found in vqid %d\n", msg);
+		dev_dbg(dev, "no message was found in vqid %d\n", msg);
 }
 
 /* kick a virtqueue */
@@ -801,45 +839,6 @@ static const struct pru_private_data *pru_rproc_get_private_data(
 	return NULL;
 }
 
-static ssize_t pru_rproc_fwname_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	int ret;
-	struct platform_device *pdev = to_platform_device(dev);
-	struct rproc *rproc = platform_get_drvdata(pdev);
-	struct pru_rproc *pru = rproc->priv;
-	const char *default_fwname = rproc->firmware;
-	
-	/*Assign firmware name provided by user*/
-	rproc->firmware = (char *)buf;
-	
-	if (list_empty(&pru->rproc->rvdevs)) {
-		dev_info(dev, "Booting the PRU core manually\n");
-		ret = rproc_boot(pru->rproc);
-		if (ret) {
-			dev_err(dev, "rproc_boot failed.Trying with default firmware file\n");
-			rproc->firmware = default_fwname;
-			ret = rproc_boot(pru->rproc);
-			if(ret){
-				dev_err(dev, "rproc_boot has failed");
-			}
-		}
-	}
-
-	return count;
-}
-
-static DEVICE_ATTR(fwname, S_IWUSR | S_IRUGO,
-NULL, pru_rproc_fwname_store);
-
-static struct attribute *pru_rproc_attributes[] = {
-	&dev_attr_fwname.attr,
-	NULL
-};
-static struct attribute_group pru_rproc_attr_group = {
-	.attrs = pru_rproc_attributes
-};
-
 static int pru_rproc_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -852,13 +851,6 @@ static int pru_rproc_probe(struct platform_device *pdev)
 	struct resource *res;
 	int i, ret;
 	const char *mem_names[PRU_MEM_MAX] = { "iram", "control", "debug" };
-
-	/*Create sysfs entry*/
-	ret = sysfs_create_group(&dev->kobj, &pru_rproc_attr_group);
-	if (ret) {
-		dev_err(dev, "Failed to create sysfs entries.\n");
-		return ret;
-	}
 
 	if (!np) {
 		dev_err(dev, "Non-DT platform device not supported\n");
@@ -939,6 +931,14 @@ static int pru_rproc_probe(struct platform_device *pdev)
 	 * the remoteproc core is done with loading the firmware image.
 	 */
 	wait_for_completion(&pru->rproc->firmware_loading_complete);
+	if (list_empty(&pru->rproc->rvdevs)) {
+		dev_info(dev, "booting the PRU core manually\n");
+		ret = rproc_boot(pru->rproc);
+		if (ret) {
+			dev_err(dev, "rproc_boot failed\n");
+			goto del_rproc;
+		}
+	}
 
 	/* suppress unused function warning */
 	(void) pru_trigger_interrupt;
@@ -947,6 +947,8 @@ static int pru_rproc_probe(struct platform_device *pdev)
 
 	return 0;
 
+del_rproc:
+	rproc_del(pru->rproc);
 put_mbox:
 	mbox_free_channel(pru->mbox);
 free_rproc:
@@ -967,8 +969,6 @@ static int pru_rproc_remove(struct platform_device *pdev)
 		rproc_shutdown(pru->rproc);
 	}
 
-	/* Remove sysfs attributes */
-	sysfs_remove_group(&dev->kobj, &pru_rproc_attr_group);
 	mbox_free_channel(pru->mbox);
 
 	rproc_del(rproc);
@@ -1040,6 +1040,112 @@ struct pruss_private_data *pruss_get_private_data(struct platform_device *pdev)
 
 	return NULL;
 }
+static ssize_t pruss_datafile_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct pruss *pruss = platform_get_drvdata(pdev);
+	int *data;
+	
+	/* Cast char buffer to int */
+	data = (int *)buf;
+
+	memcpy_fromio(data, pruss->mem_va[pruss->msg->mem_type], pruss->msg->data_size);
+	
+	return pruss->msg->data_size;
+}
+static ssize_t pruss_datafile_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct pruss *pruss = platform_get_drvdata(pdev);
+	int *data;
+
+	/* Cast char buffer to int */
+	data = (int *)buf;
+	
+	/* Store data size (in bytes) */
+	pruss->msg->data_size = count;
+
+	/* Copy data to buffers */
+	memcpy(pruss->msg->data_buf, data, count);
+	
+	/* Write to PRU */
+	if(!pruss_write(dev))
+		return -EINVAL;
+
+	return count;
+}
+
+static ssize_t pruss_memtype_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct pruss *pruss = platform_get_drvdata(pdev);
+	int *data;
+
+	/* Cast char buffer to int */
+	data = (int *)buf;
+	/* Store memory type (ex DRAM0) to structure */
+	pruss->msg->mem_type = *data;
+	
+	return count;
+}
+
+static ssize_t pruss_offset_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct pruss *pruss = platform_get_drvdata(pdev);
+	int *data;
+
+	/* Cast char buffer to int */
+	data = (int *)buf;
+	/* Store word offset to structure */
+	pruss->msg->offset = *data;
+	
+	return count;	
+}
+
+static ssize_t pruss_size_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	
+	struct platform_device *pdev = to_platform_device(dev);
+	struct pruss *pruss = platform_get_drvdata(pdev);
+	int *data;
+
+	/* Cast char buffer to int */
+	data = (int *)buf;
+	/* Store data size (in bytes) to structure */
+	pruss->msg->data_size = *data;
+	
+	return count;
+}
+
+static DEVICE_ATTR(datafile, S_IWUSR | S_IRUGO,
+		pruss_datafile_show, pruss_datafile_store);
+
+static DEVICE_ATTR(memtype, S_IWUSR | S_IRUGO,
+		NULL, pruss_memtype_store);
+
+static DEVICE_ATTR(offset, S_IWUSR | S_IRUGO,
+		NULL, pruss_offset_store);
+
+static DEVICE_ATTR(size, S_IWUSR | S_IRUGO,
+		NULL, pruss_size_store);
+
+static struct attribute *pruss_attributes[] = { 
+		&dev_attr_datafile.attr,
+		&dev_attr_memtype.attr,
+		&dev_attr_offset.attr,
+		&dev_attr_size.attr,
+		NULL
+	};
+
+static struct attribute_group pruss_attr_group = {
+		.attrs = pruss_attributes
+};
 
 static int pruss_probe(struct platform_device *pdev)
 {
@@ -1058,6 +1164,13 @@ static int pruss_probe(struct platform_device *pdev)
 	if (!node) {
 		dev_err(dev, "Non-DT platform device not supported\n");
 		return -ENODEV;
+	}
+
+	/*Create sysfs entry*/
+	ret = sysfs_create_group(&dev->kobj, &pruss_attr_group);
+	if (ret) {
+	dev_err(dev, "Failed to create sysfs entries.\n");
+	return ret;
 	}
 
 	data = pruss_get_private_data(pdev);
@@ -1081,6 +1194,14 @@ static int pruss_probe(struct platform_device *pdev)
 	pruss = devm_kzalloc(dev, sizeof(*pruss), GFP_KERNEL);
 	if (!pruss) {
 		dev_err(dev, "failed to allocate pruss\n");
+		return -ENOMEM;
+	}
+
+	/* Allocate memory for msg info struct */
+	pruss->msg = devm_kzalloc(dev, sizeof(*pruss->msg), GFP_KERNEL);
+	pruss->last_msg = devm_kzalloc(dev, sizeof(*pruss->last_msg), GFP_KERNEL);
+	if (!pruss->msg || !pruss->last_msg) {
+		dev_err(dev, "failed to allocate pruss_message\n");
 		return -ENOMEM;
 	}
 
@@ -1146,6 +1267,14 @@ static int pruss_probe(struct platform_device *pdev)
 		goto err_rpm_fail;
 	}
 
+	/* Allocate memory for messaging buffers */
+	pruss->msg->data_buf = devm_kzalloc(dev, sizeof(int)*1024, GFP_KERNEL);
+	pruss->last_msg->data_buf = devm_kzalloc(dev, sizeof(int)*1024, GFP_KERNEL);
+	if (!pruss->msg->data_buf || !pruss->last_msg->data_buf) {
+		dev_err(dev, "failed to allocate messaging buffers\n");
+		return -ENOMEM;
+	}
+
 	pruss_init_intc(pruss);
 
 	for (i = 0; i < num_irqs; i++) {
@@ -1196,6 +1325,9 @@ static int pruss_remove(struct platform_device *pdev)
 	dev_info(dev, "remove platform devices for PRU cores\n");
 	device_for_each_child(dev, NULL, pru_rproc_unregister);
 
+	/* Remove sysfs attributes */
+	sysfs_remove_group(&dev->kobj, &pruss_attr_group);
+	
 	pm_runtime_put_sync(dev);
 	pm_runtime_disable(dev);
 	if (pruss->data->has_reset)
@@ -1380,7 +1512,7 @@ static const struct of_device_id pruss_of_match[] = {
 	{ .compatible = "ti,am5728-pruss", .data = &am5728_match_data, },
 	{},
 };
-//MODULE_DEVICE_TABLE(of, pruss_of_match);
+MODULE_DEVICE_TABLE(of, pruss_of_match);
 
 static struct platform_driver pruss_driver = {
 	.driver = {
@@ -1410,7 +1542,7 @@ static int __init pruss_init(void)
 		platform_driver_unregister(&pruss_driver);
 	}
 
-	return 0;
+	return ret;
 }
 module_init(pruss_init);
 
