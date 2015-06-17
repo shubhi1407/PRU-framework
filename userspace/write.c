@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <fcntl.h>
+#include <poll.h>
 
-#define S_IWRITE  0644
 #define PRU_DRAM0 0
 #define PRU_DRAM1 1
 #define PRU_SHRAM 2
@@ -57,6 +57,14 @@ int pruss_read(unsigned const int mem_name, int wordoffset, int *data, size_t by
 	for(i=0;i<4;i++)
 		close(fd[i]);
 }
+void interrupt(int sysevent)
+{
+	char *sysevt = "/sys/devices/ocp.3/4a300000.pruss/sysevt";
+	int fd= open(sysevt, O_WRONLY, S_IWUSR);
+	write(fd,&sysevent,sizeof(int));
+	close(fd);
+}
+
 int main(void)
 {
 	int i=0;
@@ -65,7 +73,8 @@ int main(void)
 	//pruss_write(PRU_DRAM0,0,&i,sizeof(i));
 	pruss_write(PRU_DRAM0,0,p,sizeof(p));
 	pruss_read(PRU_DRAM0,0,read,sizeof(read));
-
+	interrupt(16);
+	//hostevt_poll();
 	for(i=0;i<6;i++)
 		printf("%d ", *(read+i));
 	printf("\n");

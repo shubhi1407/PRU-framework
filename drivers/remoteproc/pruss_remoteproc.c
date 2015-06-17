@@ -184,6 +184,14 @@ struct pruss_message {
 	u32 *data_buf;
 };
 /**
+ * @wait_for_event: event number to wait for
+ * @recieved_event: event number recieved from PRU
+ */
+struct hostevent {
+	int wait_for_event;
+	int recieved_event;
+};
+/**
  * struct pruss - PRUSS parent structure
  * @pdev: platform device
  * @mem_va: kernel virtual addresses for each of the PRUSS memory regions
@@ -193,6 +201,8 @@ struct pruss_message {
  * @irqs: pointer to an array of interrupts to the host processor
  * @sysev_to_ch: system events to channel mapping information
  * @ch_to_host: interrupt channel to host interrupt information
+ * @msg/last_msg: info about message to be sent/recieved
+ * @hostevent: information about hostevent/ARM interrupts
  */
 struct pruss {
 	struct platform_device *pdev;
@@ -204,6 +214,7 @@ struct pruss {
 	int sysev_to_ch[MAX_PRU_SYS_EVENTS];
 	int ch_to_host[MAX_PRU_CHANNELS];
 	struct pruss_message *msg,*last_msg;
+	struct hostevent host_event;
 };
 
 /**
@@ -459,28 +470,59 @@ static void pru_rproc_create_debug_entries(struct rproc *rproc)
 	debugfs_create_file("single_step", 0600, rproc->dbg_dir,
 			    rproc, &pru_rproc_debug_ss_fops);
 }
-
-static int pruss_write(struct device *dev)
+static int pruss_rw_sanity_check(struct pruss *pruss)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct pruss *pruss = platform_get_drvdata(pdev);
 	int offset = pruss->msg->offset;
-	
+
 	if(pruss->msg->mem_type !=PRUSS_MEM_DRAM0 && 
 	   pruss->msg->mem_type !=PRUSS_MEM_DRAM1 && 
 	   pruss->msg->mem_type !=PRUSS_MEM_SHRD_RAM2) {
-		dev_err(dev, "Invalid memory type");
+		printk(KERN_ERR "Invalid memory type");
 		return -EINVAL;
 	}
 
 	if((pruss->msg->mem_type == PRUSS_MEM_DRAM0 && offset > 2047) ||
 	   (pruss->msg->mem_type == PRUSS_MEM_DRAM1 && offset > 2047) ||
 	   (pruss->msg->mem_type == PRUSS_MEM_SHRD_RAM2 && offset > 3071)) {
-		dev_err(dev, "Offset too large");
+		printk(KERN_ERR "Offset too large");
 		return -EINVAL;
 	}
+	return 0;
+}
+static int pruss_read(struct device *dev)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct pruss *pruss = platform_get_drvdata(pdev);
+
+	int err;
+	
+	err = pruss_rw_sanity_check(pruss);
+	if(err){
+		dev_err(dev, "PRU read error");
+		return err;
+	}
+
+	/* Finally read from iomem of PRU */
+	memcpy_fromio(pruss->msg->data_buf, pruss->mem_va[pruss->msg->mem_type]+ pruss->msg->offset, pruss->msg->data_size);
+	
+	return 0;
+}
+static int pruss_write(struct device *dev)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct pruss *pruss = platform_get_drvdata(pdev);
+	
+	int err;
+	
+	err = pruss_rw_sanity_check(pruss);
+	if(err){
+		dev_err(dev, "PRU write error");
+		return err;
+	}
+
 	/* Finally write to iomem of PRU */
-	memcpy_toio(pruss->mem_va[pruss->msg->mem_type], pruss->msg->data_buf, pruss->msg->data_size);
+	memcpy_toio(pruss->mem_va[pruss->msg->mem_type] + pruss->msg->offset, pruss->msg->data_buf, pruss->msg->data_size);
+	
 	/* Stash last sent message */
 	pruss->last_msg = pruss->msg;
 	return 0;
@@ -586,18 +628,19 @@ static int pruss_configure_intc(struct pruss *pruss)
 	return 0;
 }
 
-static void pru_trigger_interrupt(struct rproc *rproc, int sysint)
+static void pru_trigger_interrupt(struct pruss *pruss, int sysint)
 {
-	struct pru_rproc *pru = rproc->priv;
-	struct pruss *pruss = pru->pruss;
-	struct device *dev = &rproc->dev;
+	//struct pru_rproc *pru = rproc->priv;
+	//struct pruss *pruss = pru->pruss;
+	//struct device *dev = &rproc->dev;
+	struct device *dev = &pruss->pdev->dev;
 
 	if (sysint < 0) {
 		dev_err(dev, "invalid sysint %d\n", sysint);
 		return;
 	}
-
-	dev_dbg(dev, "triggering sysint %d on PRU %d\n", sysint, pru->id);
+	dev_dbg(dev, "Triggering sys event %d",sysint);
+	//dev_dbg(dev, "triggering sysint %d on PRU %d\n", sysint, pru->id);
 	if (sysint < 32)
 		pruss_intc_write_reg(pruss, PRU_INTC_SRSR0, 1 << sysint);
 	else
@@ -984,10 +1027,14 @@ static int pru_rproc_remove(struct platform_device *pdev)
 static irqreturn_t pruss_handler(int irq, void *data)
 {
 	struct pruss *pruss = data;
+	struct platform_device *pdev = pruss->pdev;
+	struct device *dev = &pdev->dev;
 	u32 sys_evt, val;
 	int intr_bit = irq - pruss->irqs[0] + MIN_PRU_HOST_INT;
 	int intr_mask = (1 << intr_bit);
 	static int evt_mask = MAX_PRU_SYS_EVENTS - 1;
+
+	printk(KERN_INFO "irq recieved %d", irq);
 
 	/* check whether the interrupt can reach MPU */
 	if (!(intr_mask & pruss->data->host_events))
@@ -1002,7 +1049,14 @@ static irqreturn_t pruss_handler(int irq, void *data)
 	val = pruss_intc_read_reg(pruss, PRU_INTC_HIPIR(intr_bit));
 	if (val & INTC_HIPIR_NONE_HINT)
 		return IRQ_NONE;
-
+	
+	/* Notify userspace */
+	/* First check if recieved event is the one we're waiting for */
+	if((irq - pruss->irqs[0]) == pruss->host_event.wait_for_event) {
+		pruss->host_event.recieved_event = (irq - pruss->irqs[0]);
+		sysfs_notify(&dev->kobj, NULL, "hostevt");	
+	}
+	
 	/* clear system event */
 	sys_evt = val & evt_mask;
 	if (sys_evt < 32)
@@ -1010,6 +1064,7 @@ static irqreturn_t pruss_handler(int irq, void *data)
 	else
 		pruss_intc_write_reg(pruss, PRU_INTC_SECR1,
 				     1 << (sys_evt - 32));
+
 
 	return IRQ_HANDLED;
 }
@@ -1046,12 +1101,20 @@ static ssize_t pruss_datafile_show(struct device *dev,
 	struct platform_device *pdev = to_platform_device(dev);
 	struct pruss *pruss = platform_get_drvdata(pdev);
 	int *data;
+	int err;
 	
 	/* Cast char buffer to int */
 	data = (int *)buf;
 
-	memcpy_fromio(data, pruss->mem_va[pruss->msg->mem_type], pruss->msg->data_size);
-	
+	/* Read from PRU */
+	err = pruss_read(dev);
+	if(err){
+		dev_err(dev,"PRU read error");
+		return -EINVAL;
+}
+		
+	//memcpy(data, pruss->msg->data_buf, pruss->msg->data_size);
+	memcpy_fromio(data, pruss->mem_va[pruss->msg->mem_type]+ pruss->msg->offset, pruss->msg->data_size);	
 	return pruss->msg->data_size;
 }
 static ssize_t pruss_datafile_store(struct device *dev,
@@ -1060,6 +1123,7 @@ static ssize_t pruss_datafile_store(struct device *dev,
 	struct platform_device *pdev = to_platform_device(dev);
 	struct pruss *pruss = platform_get_drvdata(pdev);
 	int *data;
+	int err;
 
 	/* Cast char buffer to int */
 	data = (int *)buf;
@@ -1071,8 +1135,11 @@ static ssize_t pruss_datafile_store(struct device *dev,
 	memcpy(pruss->msg->data_buf, data, count);
 	
 	/* Write to PRU */
-	if(!pruss_write(dev))
+	err = pruss_write(dev);
+	if(err){
+		dev_err(dev,"PRU write error");
 		return -EINVAL;
+	}
 
 	return count;
 }
@@ -1123,6 +1190,48 @@ static ssize_t pruss_size_store(struct device *dev,
 	return count;
 }
 
+static ssize_t pruss_sysevt_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	
+	struct platform_device *pdev = to_platform_device(dev);
+	struct pruss *pruss = platform_get_drvdata(pdev);
+	int *data;
+
+	/* Cast char buffer to int */
+	data = (int *)buf;
+	/* Trigger system event */
+	pru_trigger_interrupt(pruss,*data);
+	
+	return count;
+}
+
+static ssize_t pruss_hostevt_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	
+	struct platform_device *pdev = to_platform_device(dev);
+	struct pruss *pruss = platform_get_drvdata(pdev);
+	int *data;
+
+	/* Cast char buffer to int */
+	data = (int *)buf;
+
+	/* Store hostevent value */
+	pruss->host_event.wait_for_event = *data;
+	
+	return count;
+}
+
+static ssize_t pruss_hostevt_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct pruss *pruss = platform_get_drvdata(pdev);
+	
+	return sprintf(buf,"%d",pruss->host_event.recieved_event);
+}
+
 static DEVICE_ATTR(datafile, S_IWUSR | S_IRUGO,
 		pruss_datafile_show, pruss_datafile_store);
 
@@ -1135,11 +1244,19 @@ static DEVICE_ATTR(offset, S_IWUSR | S_IRUGO,
 static DEVICE_ATTR(size, S_IWUSR | S_IRUGO,
 		NULL, pruss_size_store);
 
+static DEVICE_ATTR(sysevt, S_IWUSR | S_IRUGO,
+		NULL, pruss_sysevt_store);
+
+static DEVICE_ATTR(hostevt, S_IWUSR | S_IRUGO,
+		pruss_hostevt_show, pruss_hostevt_store);
+
 static struct attribute *pruss_attributes[] = { 
 		&dev_attr_datafile.attr,
 		&dev_attr_memtype.attr,
 		&dev_attr_offset.attr,
 		&dev_attr_size.attr,
+		&dev_attr_sysevt.attr,
+		&dev_attr_hostevt.attr,
 		NULL
 	};
 
