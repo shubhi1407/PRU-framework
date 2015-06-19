@@ -2,9 +2,11 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <fcntl.h>
+#include <string.h>
 #include <poll.h>
 #include <unistd.h>
 #include "libpru.h"
+#include <stdbool.h>
 
 int pruss_write(unsigned const int mem_name, int wordoffset, int *data, size_t bytelength)
 {
@@ -58,6 +60,8 @@ int pruss_read(unsigned const int mem_name, int wordoffset, int *data, size_t by
 		close(fd[i]);
 	return 0;
 }
+
+/* Send event (0-63) to PRU */
 void pruss_interrupt(int sysevent)
 {
 	char *sysevt = "/sys/devices/ocp.3/4a300000.pruss/sysevt";
@@ -66,6 +70,7 @@ void pruss_interrupt(int sysevent)
 	close(fd);
 }
 
+/* Wait for interrupt from PRU */
 void hostevt_poll(int hostevt, void (*callback)(int))
 {
 	if(hostevt < 0 || hostevt > MAXEVENTOUT) {
@@ -92,6 +97,7 @@ void hostevt_poll(int hostevt, void (*callback)(int))
 	        		hostevt = atoi(data);
 	        		printf("irq recieved: %d\n",hostevt);
 	        		callback(hostevt);
+	        		return;
 	          	}	
 	        }
 	    }
@@ -101,3 +107,65 @@ void hostevt_poll(int hostevt, void (*callback)(int))
 	}
 	close(fd);
 }
+
+/* Return TRUE if PRU core is running and FALSE if powered down */
+bool check_device_status(int pru_num)
+{
+	const char *pru0 = "/sys/bus/platform/devices/4a334000.pru0/uevent";
+	const char *pru1 = "/sys/bus/platform/devices/4a338000.pru1/uevent"; 
+  	const char *filename;
+  	const char *cmp_string = "DRIVER=pru-rproc";
+  	
+  	filename=(pru_num==0)?pru0:pru1;
+  	
+  	FILE *file = fopen (filename, "r");
+  	if (file != NULL) {
+    	char line [50];
+    	fgets(line,sizeof line,file);  
+      	
+      	if(strncmp(line,cmp_string,sizeof(cmp_string)/sizeof(char)))
+      		return false;
+
+      	/* PRU core is currently running. return TRUE*/
+		fclose(file);
+    	return true;
+    }
+    else {
+    printf("File IO Error\n");
+    perror(filename); //print the error message on stderr.
+    exit(1);
+  	}
+    
+}
+
+/* Shutdown the PRU core */
+void pruss_shutdown(int pru_num)
+{	
+	const char *pru0="4a334000.pru0";
+	const char *pru1="4a338000.pru1";	
+	if(pru_num == PRU0 || pru_num == PRU1) {
+		
+		if(!check_device_status(pru_num)) {
+			printf("PRU%d already powered down\n",pru_num);
+			return;
+		}
+
+		/*Shutdown pru*/
+		printf("Shutting down PRU%d\n",pru_num );
+
+		FILE *fp;
+   		fp = fopen("/sys/bus/platform/drivers/pru-rproc/unbind", "w");
+		if(pru_num == PRU0)
+			fputs(pru0,fp);
+		else
+			fputs(pru1,fp);
+		fclose(fp);
+	}
+	else{
+		printf("Wrong pru id\n");
+		return;
+	}
+}
+
+
+

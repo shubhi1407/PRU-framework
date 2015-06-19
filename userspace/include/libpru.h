@@ -3,6 +3,8 @@
 #define PRU_DRAM1 1
 #define PRU_SHRAM 2
 #define TIMEOUT -1
+#define PRU0    0
+#define PRU1 	1
 
 enum pruss_mem {
 	EVENTOUT0 = 0,
@@ -23,3 +25,7 @@ int pruss_read(unsigned const int mem_name, int wordoffset, int *data, size_t by
 void pruss_interrupt(int sysevent);
 
 void hostevt_poll(int hostevt, void (*callback)(int));
+
+void pruss_shutdown(int pru_num);
+
+//bool check_device_status(int pru_num);
