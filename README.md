@@ -28,7 +28,7 @@ PRUSS support for newer kernels (3.14 and above). A complete communication frame
 
 1. Copy pru firmware to /lib/firmware.
 Firmware name for pru0 must be 'rproc-pru0-fw'
-and for pru1 it must be 'rproc-pru1-fw'. (without '')
+and for pru1 it must be 'rproc-pru1-fw'. (without '  ')
 
 2. Load driver by using modprobe pruss_remoteproc.
 
