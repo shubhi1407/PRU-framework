@@ -16,6 +16,10 @@ PRUSS support for newer kernels (3.14 and above). A complete communication frame
 	
 	`make`
 
+4. Install the compiled module
+
+	`make install`
+
 ###User Library and Examples.
 
 1. cd to /userspace and run 'make' command. This will compile the library and examples
