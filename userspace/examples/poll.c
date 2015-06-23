@@ -8,9 +8,11 @@ void mycallback(int p)
 
 int main(void)
 {
-	
+	printf("waiting for event....\n");
 	hostevt_poll(EVENTOUT1,mycallback);
 	
+	/* Shutdown PRU core */
+	pruss_shutdown(PRU0);
 	return 0;
 }
 

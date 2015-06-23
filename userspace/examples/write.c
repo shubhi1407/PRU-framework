@@ -10,13 +10,31 @@
 int main(void)
 {
 	int i=0;
-	int p[6]={102,-4,2,457,4325,757};
+	int data[6]={102,-4,2,457,4325,757};
 	int read[6]={0};
-	//pruss_write(PRU_DRAM0,0,&i,sizeof(i));
-	pruss_write(PRU_DRAM0,0,p,sizeof(p));
-	pruss_read(PRU_DRAM0,0,read,sizeof(read));
-	pruss_interrupt(16);
-	//hostevt_poll();
+	int err;
+
+	err = pruss_write(PRU_DRAM0,0,data,sizeof(data));
+	if(err){
+		perror("Write error");
+		return err;
+	}
+		
+	err = pruss_read(PRU_DRAM0,0,read,sizeof(read));
+	
+	if(err){
+		perror("Read error");
+		return err;
+	}
+
+	err = pruss_interrupt(16);
+
+	if(err){
+		perror("Interrupt error");
+		return err;
+	}
+	
+	printf("Data read\n");
 	for(i=0;i<6;i++)
 		printf("%d ", *(read+i));
 	printf("\n");
