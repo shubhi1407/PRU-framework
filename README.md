@@ -26,8 +26,11 @@ PRUSS support for newer kernels (3.14 and above). A complete communication frame
 
 2. Clone TI's PRU software package library from this [link](https://git.ti.com/pru-software-support-package)
 	to any suitable directory
+	
 	Example:
+	
 	`cd /usr/share`
+	
 	`git clone git://git.ti.com/pru-software-support-package/pru-software-support-package.git`
 
 3. Edit /firmware/Makefile variable SWDIR to the directory in which you cloned repo in Step 2 (skip this step if you
