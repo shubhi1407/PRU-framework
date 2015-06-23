@@ -20,6 +20,31 @@ PRUSS support for newer kernels (3.14 and above). A complete communication frame
 
 	`make install`
 
+###PRU firmware
+
+1. Install TI-PRU Code generation tool from this [link](http://software-dl.ti.com/codegen/non-esd/downloads/download.htm#PRU)
+
+2. Clone TI's PRU software package library from this [link](https://git.ti.com/pru-software-support-package)
+	to any suitable directory
+	Example:
+	`cd /usr/share`
+	`git clone git://git.ti.com/pru-software-support-package/pru-software-support-package.git`
+
+3. Edit /firmware/Makefile variable SWDIR to the directory in which you cloned repo in Step 2 (skip this step if you
+	cloned in /usr/share) 
+
+4. cd to /firmware
+
+	`make`
+
+5. Install firmware
+	
+	if above steps are performed on host PC
+	`make install-tobb`
+
+	if above steps are perfomed on BBB
+	`make install-frombb` 
+
 ###User Library and Examples.
 
 1. cd to /userspace and run 'make' command. This will compile the library and examples
