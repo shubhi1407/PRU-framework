@@ -152,7 +152,7 @@ bool check_device_status(int pru_num)
 }
 
 /* Shutdown the PRU core */
-void pruss_shutdown(int pru_num)
+int pruss_shutdown(int pru_num)
 {	
 	const char *pru0="4a334000.pru0";
 	const char *pru1="4a338000.pru1";
@@ -160,12 +160,11 @@ void pruss_shutdown(int pru_num)
 	if(pru_num == PRU0 || pru_num == PRU1) {
 		
 		if(!check_device_status(pru_num)) {
-			fprintf(stderr,"PRU%d already powered down\n",pru_num);
-			return;
+			//fprintf(stderr,"PRU%d already powered down\n",pru_num);
+			return -1;
 		}
 
 		/*Shutdown pru*/
-
 		FILE *fp;
    		fp = fopen(filename, "w");
    		if(fp!=NULL) {
@@ -176,14 +175,15 @@ void pruss_shutdown(int pru_num)
 		fclose(fp);
    		}
    		else{
-   			perror(filename);
+   			return -EACCES;
    		}
 		
 	}
 	else{
-		fprintf(stderr,"Wrong PRU id.\n");
-		return;
+		return -1;
 	}
+
+	return 0;
 }
 
 
