@@ -26,7 +26,7 @@ int pruss_write(unsigned const int mem_name, int wordoffset, int *data, size_t b
 		mem_name,wordoffset,bytelength,bytelength/sizeof(int));
 	printf("-------------------------------------------\n");
 	*/
-	if(!fd[0] && !fd[1] && !fd[2]) {
+	if(fd[0] && fd[1] && fd[2]) {
 		write(fd[0], &mem_name, sizeof(mem_name));
 		write(fd[1], &wordoffset, sizeof(wordoffset));
 		write(fd[2], data, bytelength);
@@ -54,7 +54,7 @@ int pruss_read(unsigned const int mem_name, int wordoffset, int *data, size_t by
 				 open(size,  O_WRONLY,  S_IWUSR),
 				 open(data_file,  O_RDWR,  S_IRWXU) };
 	
-	if(!fd[0] && !fd[1] && !fd[2] && !fd[3]) {
+	if(fd[0] && fd[1] && fd[2] && fd[3]) {
 		write(fd[0], &mem_name, sizeof(mem_name));
 		write(fd[1], &wordoffset, sizeof(wordoffset));
 		write(fd[2], &bytelength, sizeof(int));
@@ -75,7 +75,7 @@ int pruss_interrupt(int sysevent)
 {
 	char *sysevt = "/sys/devices/ocp.3/4a300000.pruss/sysevt";
 	int fd= open(sysevt, O_WRONLY, S_IWUSR);
-	if(!fd) {
+	if(fd) {
 		write(fd,&sysevent,sizeof(int));
 		close(fd);	
 	}
