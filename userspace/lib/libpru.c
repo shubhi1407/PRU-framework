@@ -8,9 +8,18 @@
 #include "libpru.h"
 #include <stdbool.h>
 #include <errno.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 extern int errno ;
-
+/* Global Variables */
+const char *pru0 = "4a334000.pru0";
+const char *pru1 = "4a338000.pru1";
+const char *rproc_unbind = "/sys/bus/platform/drivers/pru-rproc/unbind";
+const char *rproc_bind = "/sys/bus/platform/drivers/pru-rproc/bind";
+const char *fw0 = "/lib/firmware/rproc-pru0-fw";
+const char *fw1 = "/lib/firmware/rproc-pru1-fw";
+	
 int pruss_write(unsigned const int mem_name, int wordoffset, int *data, size_t bytelength)
 {
 	int i=0;
@@ -85,53 +94,15 @@ int pruss_interrupt(int sysevent)
 	return 0;
 }
 
-/* Wait for interrupt from PRU */
-void hostevt_poll(int hostevt, void (*callback)(int))
-{
-	if(hostevt < 0 || hostevt > MAXEVENTOUT) {
-		printf("Incorrect host event number\n");
-		return;
-	}
-	//int cnt;
-	char firstread[1];
-	char data[2];
-	int fd = open("/sys/devices/ocp.3/4a300000.pruss/hostevt", O_RDWR);
-	/* Have to perform a dummy read for poll to work */
-	read( fd, firstread, 1 ); 
-	lseek(fd,0,0);
-	/* Send host event number we are waiting for to kernel */
-	write(fd,&hostevt,sizeof(int)); 
-	
-	if (-1 != fd) {
-		struct pollfd host_poll = { .fd = fd, .events = POLLPRI|POLLERR };
-	    int rv = poll(&host_poll, 1, TIMEOUT);    /* block endlessly */
-	    if (rv > 0) {
-	        if (host_poll.revents & POLLPRI) {
-	        	int n = pread(host_poll.fd, data, sizeof(data),0);
-	        	if(n>0) {   /*IRQ happened*/
-	        		hostevt = atoi(data);
-	        		printf("irq recieved: %d\n",hostevt);
-	        		callback(hostevt);
-	        		return;
-	          	}	
-	        }
-	    }
-	    else {
-	    	printf("Timeout\n");
-	    }
-	}
-	close(fd);
-}
-
 /* Return TRUE if PRU core is running and FALSE if powered down */
 bool check_device_status(int pru_num)
 {
-	const char *pru0 = "/sys/bus/platform/devices/4a334000.pru0/uevent";
-	const char *pru1 = "/sys/bus/platform/devices/4a338000.pru1/uevent"; 
+	const char *pru0_uevent = "/sys/bus/platform/devices/4a334000.pru0/uevent";
+	const char *pru1_uevent = "/sys/bus/platform/devices/4a338000.pru1/uevent"; 
   	const char *filename;
   	const char *cmp_string = "DRIVER=pru-rproc";
   	
-  	filename=(pru_num==0)?pru0:pru1;
+  	filename=(pru_num==0)?pru0_uevent:pru1_uevent;
   	
   	FILE *file = fopen (filename, "r");
   	if (file != NULL) {
@@ -151,12 +122,56 @@ bool check_device_status(int pru_num)
     
 }
 
+/* Wait for interrupt from PRU */
+int hostevt_poll(int hostevt, void (*callback)(int))
+{
+	char firstread[1];
+	char data[2];
+	int fd = open("/sys/devices/ocp.3/4a300000.pruss/hostevt", O_RDWR);
+
+	if(!check_device_status(0) && !check_device_status(1))
+		return -1;
+
+	if(hostevt < 0 || hostevt > MAXEVENTOUT) 
+		return -EINVAL;
+		
+	/* Have to perform a dummy read for poll to work */
+	read( fd, firstread, 1 ); 
+	lseek(fd,0,0);
+
+	/* Send host event number we are waiting for to kernel */
+	write(fd,&hostevt,sizeof(int)); 
+	
+	if (fd != -1) {
+
+		struct pollfd host_poll = { .fd = fd, .events = POLLPRI|POLLERR };
+	    
+	    int rv = poll(&host_poll, 1, TIMEOUT);    /* block until timeout */
+	    if (rv > 0) {
+	        if (host_poll.revents & POLLPRI) {
+	        	int n = pread(host_poll.fd, data, sizeof(data),0);
+	        	if(n>0) {   /*IRQ happened*/
+	        		hostevt = atoi(data);
+	        		//printf("irq recieved: %d\n",hostevt);
+	        		callback(hostevt);
+	        		close(fd);
+	        		return 0;
+	          	}	
+	        }
+	    }
+	    /* Timeout occured */
+	    else {
+	    	return -ETIME;
+	    }
+	}
+	close(fd);
+	return -EACCES;
+}
+
 /* Shutdown the PRU core */
 int pruss_shutdown(int pru_num)
 {	
-	const char *pru0="4a334000.pru0";
-	const char *pru1="4a338000.pru1";
-	const char *filename="/sys/bus/platform/drivers/pru-rproc/unbind";	
+		
 	if(pru_num == PRU0 || pru_num == PRU1) {
 		
 		if(!check_device_status(pru_num)) {
@@ -166,7 +181,7 @@ int pruss_shutdown(int pru_num)
 
 		/*Shutdown pru*/
 		FILE *fp;
-   		fp = fopen(filename, "w");
+   		fp = fopen(rproc_unbind, "w");
    		if(fp!=NULL) {
    			if(pru_num == PRU0)
 				fputs(pru0,fp);
@@ -176,12 +191,53 @@ int pruss_shutdown(int pru_num)
    		}
    		else{
    			return -EACCES;
-   		}
-		
+   		}	
 	}
-	else{
+	else {
 		return -1;
 	}
+	return 0;
+}
+
+int pruss_boot(char *fwname,int pru_num)
+{
+
+	int err;
+	const char *fw;
+	FILE *fp;
+	struct stat file_info;
+	
+	/* If pru core is already booted shut it down */
+	if(check_device_status(pru_num))
+		pruss_shutdown(pru_num);
+
+	fw = (pru_num==0)?fw0:fw1;	
+
+	/* Check if previous symlink exist. If yes, remove them */
+	lstat(fw,&file_info);
+	if(S_ISLNK(file_info.st_mode))
+		remove(fw);
+
+	/* Create symlink between user fw path and /lib/firware/rproc-pru01-fw */
+	err = symlink(fwname,fw);
+	if(err) {
+		return err;
+	}
+		
+
+	/* Finally boot pru core */
+	fp = fopen(rproc_bind, "w");
+   	if(fp!=NULL) {
+   		
+   		if(pru_num == PRU0)
+			fputs(pru0,fp);
+		else
+			fputs(pru1,fp);
+		fclose(fp);
+   	}
+   	else {
+   		return -EACCES;
+   	}
 
 	return 0;
 }

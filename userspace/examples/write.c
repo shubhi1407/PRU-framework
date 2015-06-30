@@ -14,6 +14,10 @@ int main(void)
 	int read[6]={0};
 	int err;
 
+	err = pruss_boot("/lib/rproc-pru1-fw",PRU1);
+	if(err)
+		return err;
+
 	err = pruss_write(PRU_DRAM0,0,data,sizeof(data));
 	if(err){
 		perror("Write error");
@@ -39,6 +43,10 @@ int main(void)
 		printf("%d ", *(read+i));
 	printf("\n");
 	
+	err = pruss_shutdown(PRU1);
+	if(err)
+		return err;
+
 	return 0;
 }
 

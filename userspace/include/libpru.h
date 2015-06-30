@@ -1,4 +1,4 @@
-
+#include <stdbool.h>
 #define PRU_DRAM0 0
 #define PRU_DRAM1 1
 #define PRU_SHRAM 2
@@ -24,8 +24,11 @@ int pruss_read(unsigned const int mem_name, int wordoffset, int *data, size_t by
 
 int pruss_interrupt(int sysevent);
 
-void hostevt_poll(int hostevt, void (*callback)(int));
+bool check_device_status(int pru_num);
+
+int hostevt_poll(int hostevt, void (*callback)(int));
 
 int pruss_shutdown(int pru_num);
 
-//bool check_device_status(int pru_num);
+int pruss_boot(char *fwname,int pru_num);
+//

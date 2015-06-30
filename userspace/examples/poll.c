@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <unistd.h>
 #include "libpru.h"
 void mycallback(int p)
 {
@@ -7,12 +8,25 @@ void mycallback(int p)
 }
 
 int main(void)
-{
-	printf("waiting for event....\n");
-	hostevt_poll(EVENTOUT1,mycallback);
+{	
+	int err;
+	char *fw = "/lib/rproc-pru0-fw";
 	
+	/* Boot PRU 0 */
+	err = pruss_boot(fw,PRU0);
+	if(err)
+		return err;
+	
+	printf("waiting for event....\n");
+	err = hostevt_poll(EVENTOUT1,mycallback);
+	if(err)
+		return err;		
+
 	/* Shutdown PRU core */
-	pruss_shutdown(PRU0);
+	err = pruss_shutdown(PRU0);
+	if(err)
+		return err;
+
 	return 0;
 }
 
