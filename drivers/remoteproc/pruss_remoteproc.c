@@ -511,9 +511,9 @@ static int pruss_write(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct pruss *pruss = platform_get_drvdata(pdev);
-	
+	int data[pruss->msg->data_size/sizeof(int)];
 	int err;
-	
+	int i=0;
 	err = pruss_rw_sanity_check(pruss);
 	if(err){
 		dev_err(dev, "PRU write error");
@@ -521,8 +521,8 @@ static int pruss_write(struct device *dev)
 	}
 
 	/* Finally write to iomem of PRU */
-	memcpy_toio(pruss->mem_va[pruss->msg->mem_type] + pruss->msg->offset, pruss->msg->data_buf, pruss->msg->data_size);
-	
+	memcpy_toio(pruss->mem_va[pruss->msg->mem_type] + pruss->msg->offset*sizeof(uint32_t), pruss->msg->data_buf, pruss->msg->data_size);
+
 	/* Stash last sent message */
 	pruss->last_msg = pruss->msg;
 	return 0;
@@ -1004,8 +1004,17 @@ static int pru_rproc_remove(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct rproc *rproc = platform_get_drvdata(pdev);
 	struct pru_rproc *pru = rproc->priv;
-
+	struct pruss *pruss = pru->pruss;
+	int i=0;
+	
 	dev_info(dev, "%s: removing rproc %s\n", __func__, rproc->name);
+
+	/* Reset INTC config in structure */
+	for (i = 0; i < ARRAY_SIZE(pruss->sysev_to_ch); i++)
+		pruss->sysev_to_ch[i] = -1;
+
+	for (i = 0; i < ARRAY_SIZE(pruss->ch_to_host); i++)
+		pruss->ch_to_host[i] = -1;
 
 	if (list_empty(&pru->rproc->rvdevs)) {
 		dev_info(dev, "stopping the manually booted PRU core\n");
@@ -1102,7 +1111,7 @@ static ssize_t pruss_datafile_show(struct device *dev,
 	struct pruss *pruss = platform_get_drvdata(pdev);
 	int *data;
 	int err;
-	
+	int i=0;
 	/* Cast char buffer to int */
 	data = (int *)buf;
 
@@ -1111,10 +1120,11 @@ static ssize_t pruss_datafile_show(struct device *dev,
 	if(err){
 		dev_err(dev,"PRU read error");
 		return -EINVAL;
-}
+	}
 		
 	//memcpy(data, pruss->msg->data_buf, pruss->msg->data_size);
-	memcpy_fromio(data, pruss->mem_va[pruss->msg->mem_type]+ pruss->msg->offset, pruss->msg->data_size);	
+	memcpy_fromio(data, pruss->mem_va[pruss->msg->mem_type]+ pruss->msg->offset*sizeof(uint32_t), pruss->msg->data_size);
+	
 	return pruss->msg->data_size;
 }
 static ssize_t pruss_datafile_store(struct device *dev,
@@ -1562,7 +1572,7 @@ static const struct of_device_id pru_rproc_match[] = {
 	{ .compatible = "ti,pru-rproc", .data = pru_match_data, },
 	{},
 };
-MODULE_DEVICE_TABLE(of, pru_rproc_match);
+//MODULE_DEVICE_TABLE(of, pru_rproc_match);
 
 static struct platform_driver pru_rproc_driver = {
 	.driver = {
@@ -1629,7 +1639,7 @@ static const struct of_device_id pruss_of_match[] = {
 	{ .compatible = "ti,am5728-pruss", .data = &am5728_match_data, },
 	{},
 };
-MODULE_DEVICE_TABLE(of, pruss_of_match);
+//MODULE_DEVICE_TABLE(of, pruss_of_match);
 
 static struct platform_driver pruss_driver = {
 	.driver = {
