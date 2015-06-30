@@ -14,7 +14,7 @@ CGTDIR = /usr/share/ti/cgt-pru
 # PRU software support package by TI
 SWDIR = /usr/share/pru-software-support-package
 
-INCLUDEDIR = -I$(SWDIR)/include -I$(CGTDIR)/include
+INCLUDEDIR = -I$(SWDIR)/include -I$(CGTDIR)/include -I$(CGTDIR)/lib
 
 # Compiler Options
 # -v3				PRU version 3
@@ -30,7 +30,7 @@ CFLAGS= -v3 -s -al -O3 --c99 --gcc --printf_support=minimal --symdebug:none $(IN
 # Linker Options
 # -cr 				Link using RAM auto init model (loader assisted)
 # -x				Reread libs until no unresolved symbols found
-LDFLAGS=-cr --diag_warning=225 -lam335x_pru.cmd -x
+LDFLAGS=-cr --diag_warning=225 -lam335x_pru.cmd -x 
 
 .PHONY: all clean
 
