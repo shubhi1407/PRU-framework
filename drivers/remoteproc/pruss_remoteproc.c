@@ -511,9 +511,8 @@ static int pruss_write(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct pruss *pruss = platform_get_drvdata(pdev);
-	int data[pruss->msg->data_size/sizeof(int)];
 	int err;
-	int i=0;
+
 	err = pruss_rw_sanity_check(pruss);
 	if(err){
 		dev_err(dev, "PRU write error");
