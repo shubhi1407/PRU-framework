@@ -25,12 +25,12 @@ INCLUDEDIR = -I$(SWDIR)/include -I$(CGTDIR)/include -I$(CGTDIR)/lib
 # -ppd				Generate dependencies *.pp
 # -ppa				Continue after generating deps
 # -DDEBUG			Enable debug
-CFLAGS= -v3 -s -al -O3 --c99 --gcc --printf_support=minimal --symdebug:none $(INCLUDEDIR)
+CFLAGS= -v3 -s -al -O3 --c99 --gcc --printf_support=minimal --symdebug:none $(INCLUDEDIR) -ppd -ppa
 
 # Linker Options
 # -cr 				Link using RAM auto init model (loader assisted)
 # -x				Reread libs until no unresolved symbols found
-LDFLAGS=-cr --diag_warning=225 -lam335x_pru.cmd -x 
+LDFLAGS=-cr --diag_warning=225 -lam335x_pru.cmd -x
 
 .PHONY: all clean
 
@@ -44,7 +44,7 @@ rproc-pru0-fw: rproc-pru0-fw.obj
 	@echo "  LD	$@"
 	@$(CC) $(CFLAGS) $^ -q -z $(LDFLAGS) -o $@
 	
-rproc-pru1-fw: rproc-pru1-fw.obj 
+rproc-pru1-fw: rproc-pru1-fw.obj pru_vring.obj
 	@echo "  LD	$@"
 	@$(CC) $(CFLAGS) $^ -q -z $(LDFLAGS) -o $@
 	
@@ -57,5 +57,7 @@ install-tobb: rproc-pru0-fw rproc-pru1-fw
 	scp -q rproc-pru1-fw $(BBHOST):/lib/firmware
 
 clean:
-	rm -f *.obj *.lst *.s rproc-pru0-fw rproc-pru1-fw
+	rm -f *.obj *.lst *.s rproc-pru0-fw rproc-pru1-fw *.pp
+
+-include $(patsubst %.obj,%.pp,$(OBJS))
 
