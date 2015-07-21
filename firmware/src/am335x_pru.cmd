@@ -81,5 +81,5 @@ SECTIONS {
 	.farbss		>  PRU_DMEM_0_1, PAGE 1
 	.fardata	>  PRU_DMEM_0_1, PAGE 1
 
-	.resource_table > PRU_DMEM_0_1, PAGE 1
+	.resource_table > 0x00000500, PAGE 1
 }

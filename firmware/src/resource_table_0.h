@@ -46,7 +46,7 @@
 
 /*
  * Sizes of the virtqueues (expressed in number of buffers supported,
- * and must be power of 2)
+ * and must be power of 2. Each buffer is 512 bytes. Max 512 buffers allowed)
  */
 #define PRU_RPMSG_VQ0_SIZE	2
 #define PRU_RPMSG_VQ1_SIZE	2

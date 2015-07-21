@@ -65,6 +65,11 @@ struct my_resource_table {
 
 	uint32_t offset[1]; /* Should match 'num' in actual definition */
 
+	/* rpmsg vdev entry */
+	struct fw_rsc_vdev rpmsg_vdev;
+	struct fw_rsc_vdev_vring rpmsg_vring0;
+	struct fw_rsc_vdev_vring rpmsg_vring1;
+
 	/* intc definition */
 	struct fw_rsc_custom pru_ints;
 };
@@ -73,9 +78,22 @@ struct my_resource_table {
 #pragma RETAIN(am335x_pru_remoteproc_ResourceTable)
 struct my_resource_table am335x_pru_remoteproc_ResourceTable = {
 	1,	/* we're the first version that implements this */
-	0,	/* number of entries in the table */
+	1,	/* number of entries in the table */
 	0, 0,	/* reserved, must be zero */
-	0,	/* offset[0] */
+	{		/* offset[0] */
+		offsetof(struct my_resource_table, rpmsg_vdev),
+	},
+	/* rpmsg vdev entry */
+	{
+		TYPE_VDEV, VIRTIO_ID_RPMSG, 0,
+		RPMSG_PRU_C0_FEATURES, 0, 0, 0, 2, { 0, 0 },
+		/* no config data */
+	},
+	/* the two vrings */
+	/* TODO: What to do with vring da? */
+	{ 0, 16, PRU_RPMSG_VQ0_SIZE, 1, 0 },
+	{ 0, 16, PRU_RPMSG_VQ1_SIZE, 2, 0 },
+	
 };
 
 #endif /* _RSC_TABLE_PRU_H_ */
