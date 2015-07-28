@@ -52,6 +52,9 @@
 /* maximum vrings for each vdev */
  #define MAX_VRINGS 		   2
 
+/* sysevent reserved for kick from pru */
+#define VRING_EVT			   17
+
 /* PRU_ICSS_PRU_CTRL registers */
 #define PRU_CTRL_CTRL		0x0000
 #define PRU_CTRL_STS		0x0004
@@ -1004,6 +1007,23 @@ static int pru_rproc_probe(struct platform_device *pdev)
 	/* suppress unused function warning */
 	(void) pru_trigger_interrupt;
 
+	/* After registering vdev, assign rproc provided callback for vqs 
+	 * instead of using default callbacks provided in virtio_rpmsg_bus driver
+	 */
+	if(!list_empty(&pru->rproc->rvdevs)) {
+		/* Some delay to allow virtio driver to probe.
+		 * XXX: Replace by wait_for_completion
+		 */
+		msleep(200);
+		list_for_each_entry(rvdev, &pru->rproc->rvdevs, node){
+			// vrings are in the the order ->  rx,tx 
+			for (i = 0; i < MAX_VRINGS-1; i++) {
+				rvring = &rvdev->vring[i];
+				rvring->vq->callback = vq_cbs[i];
+			}
+		} 
+	}
+
 	dev_info(dev, "PRU rproc node %s probed successfully\n", np->full_name);
 
 	return 0;
@@ -1046,6 +1066,21 @@ static int pru_rproc_remove(struct platform_device *pdev)
 
 	return 0;
 }
+/*
+ * Function to find pru core dev
+ * which has vdev published in its
+ * resource table
+*/
+static int find_pru_with_vdev(struct device *dev, void *data)
+{	
+	struct platform_device *pdev = to_platform_device(dev);
+	struct rproc *rproc = platform_get_drvdata(pdev);
+	struct pru_rproc *pru = rproc->priv;
+	dev_info(dev, "Currently searching vdev for PRU-%d", pru->id);
+	if (list_empty(&pru->rproc->rvdevs))
+		return 0;
+	return 1; //vdev found
+}
 
 /*
  * Interrupt Handler for all PRUSS MPU interrupts
@@ -1056,10 +1091,24 @@ static irqreturn_t pruss_handler(int irq, void *data)
 	struct pruss *pruss = data;
 	struct platform_device *pdev = pruss->pdev;
 	struct device *dev = &pdev->dev;
+	struct device *pru_core_dev = NULL;
+	struct platform_device *pru_core_pdev = NULL;
+	struct rproc *rproc = NULL;
+	struct pru_rproc *pru = NULL;
 	u32 sys_evt, val;
 	int intr_bit = irq - pruss->irqs[0] + MIN_PRU_HOST_INT;
 	int intr_mask = (1 << intr_bit);
+	int ret;
 	static int evt_mask = MAX_PRU_SYS_EVENTS - 1;
+
+	/* Get dev of pru which has vdev */
+	pru_core_dev = device_find_child(dev,NULL,find_pru_with_vdev);
+	/* Get platform deivce */
+	pru_core_pdev = to_platform_device(pru_core_dev);
+
+	rproc = platform_get_drvdata(pru_core_pdev);
+	pru = rproc->priv;
+	dev_info(pru_core_dev, "PRU-%d has vdev\n",pru->id);
 
 	printk(KERN_INFO "irq recieved %d", irq);
 
@@ -1092,6 +1141,18 @@ static irqreturn_t pruss_handler(int irq, void *data)
 		pruss_intc_write_reg(pruss, PRU_INTC_SECR1,
 				     1 << (sys_evt - 32));
 
+	/* Handle vring related sysevents */
+	if(sys_evt==VRING_EVT) {
+		
+		ret = rproc_vq_interrupt(rproc, 0);
+			if (ret == IRQ_HANDLED) {
+				printk(KERN_INFO "vring irq handled.\n");
+			}
+			else{
+				printk(KERN_INFO "vring irq not handled\n");
+			}
+	}
+	put_device(pru_core_dev);
 
 	return IRQ_HANDLED;
 }
@@ -1129,7 +1190,7 @@ static ssize_t pruss_datafile_show(struct device *dev,
 	struct pruss *pruss = platform_get_drvdata(pdev);
 	int *data;
 	int err;
-	int i=0;
+
 	/* Cast char buffer to int */
 	data = (int *)buf;
 
