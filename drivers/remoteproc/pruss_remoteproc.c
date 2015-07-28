@@ -25,12 +25,14 @@
 #include <linux/interrupt.h>
 #include <linux/pm_runtime.h>
 #include <linux/virtio.h>
+#include <linux/virtio_config.h>
 #include <linux/dma-mapping.h>
 #include <linux/remoteproc.h>
 #include <linux/mailbox_client.h>
 #include <linux/omap-mailbox.h>
 #include <asm/io.h>
 #include <linux/platform_data/remoteproc-pruss.h>
+#include <linux/delay.h>
 
 #include "remoteproc_internal.h"
 #include "pruss_remoteproc.h"
@@ -46,6 +48,9 @@
 
 /* maximum number of host interrupts */
 #define MAX_PRU_HOST_INT       10
+
+/* maximum vrings for each vdev */
+ #define MAX_VRINGS 		   2
 
 /* PRU_ICSS_PRU_CTRL registers */
 #define PRU_CTRL_CTRL		0x0000
@@ -881,6 +886,17 @@ static const struct pru_private_data *pru_rproc_get_private_data(
 	return NULL;
 }
 
+/* Custome call backs to execute when virtqueues are kicked */
+static void custom_recv_cb(struct virtqueue *rvq)
+{
+	printk(KERN_INFO "Custom rx callback executed\n");
+}
+
+static void custom_tx_cb(struct virtqueue *rvq)
+{
+	printk(KERN_INFO "Custom tx callback executed\n");
+}
+
 static int pru_rproc_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -889,8 +905,11 @@ static int pru_rproc_probe(struct platform_device *pdev)
 	struct pru_rproc *pru;
 	const struct pru_private_data *pdata;
 	struct rproc *rproc = NULL;
+	struct rproc_vdev *rvdev=NULL;
+	struct rproc_vring *rvring=NULL;
 	struct mbox_client *client;
 	struct resource *res;
+	vq_callback_t *vq_cbs[] = { custom_recv_cb, custom_tx_cb};
 	int i, ret;
 	const char *mem_names[PRU_MEM_MAX] = { "iram", "control", "debug" };
 
