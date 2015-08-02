@@ -53,12 +53,10 @@ volatile far uint32_t CT_DRAM __attribute__((cregister("PRU_DMEM_0_1", near), pe
 #define PRU1
 #define HOST1_MASK		(0x80000000)
 #define PRU0_PRU1_EVT	(16)
-#define RX_PRU			(0x9E085400)
-#define RX_DMA			(0x9e085000)
 #define RSC_TABLE		(0x00000500)
-#define TEST 			(0x9E086000)
 
 #define TOGGLE_BLUE (__R30 ^= (1 << 7))
+
 static inline void *pa_to_da(u32 pa)
 {
 	/* we don't support physical addresses in GPMC */
@@ -67,6 +65,7 @@ static inline void *pa_to_da(u32 pa)
 
 	return (void *)pa;
 }
+
 void main(){
 	struct my_resource_table volatile * const rsc = (struct my_resource_table *)RSC_TABLE;
 
@@ -76,41 +75,36 @@ void main(){
 	pru_vring_init(&tx_ring, "tx", &tx_vring_rsc);
 	pru_vring_init(&rx_ring, "rx", &rx_vring_rsc);
 	
-	uint32_t value = tx_vring_rsc.da;
-
 	/* Clear SYSCFG[STANDBY_INIT] to enable OCP master port */
 	CT_CFG.SYSCFG_bit.STANDBY_INIT = 0;
 
 	/* Configure GPI and GPO as Mode 0 (Direct Connect) */
 	CT_CFG.GPCFG0 = 0x0000;
 
-	uint32_t *pDdr = (uint32_t *) &CT_DRAM;
-
-	//uint32_t volatile * const pru_addr = (uint32_t *)RX_PRU;
-	//uint32_t volatile * const dma_addr = (uint32_t *)RX_DMA;
-
 	/* Clear GPO pins */
 	__R30 &= 0x00000000;
-	uint32_t tx_data[4] = {1,2,3,4};
-	uint32_t *ptr;
+	int tx_data[10]={1,2,3,4,5,6,7,8,9,10};
+	void *ptr;
 	int i=0;
+
 	/* Spin in loop until interrupt on HOST 1 is detected */
 	while(1){
 		//Read value from ddr
-		if(value==TEST)
-			__R30 |= (1 << 7);
+		 __delay_cycles(200000000);
 
 		if(pru_vring_buf_is_avail(&tx_ring)) {
+			
 			vring_desc = pru_vring_get_next_avail_desc(&tx_ring);
 
 			ptr = pa_to_da(vring_desc->addr);
 
 			for(i=0;i<sizeof(tx_data)/sizeof(int);i++)
-				*ptr=tx_data[i]; //write to vring
+				*(int *)(ptr+i)=tx_data[i]; //write to vring
 
 			vring_desc->len = sizeof(tx_data);
 			vring_desc->flags &= ~VRING_DESC_F_NEXT;	/* no buffer is linked to this */
-			pru_vring_push_one(&tx_ring, sizeof(tx_data));
+			pru_vring_push_one(&tx_ring, 1);
+			
 			__R31 |= 0x00000021; //send sys ent 32
 			
 		}
@@ -118,10 +112,10 @@ void main(){
 		if (__R31 & HOST1_MASK){
 			TOGGLE_BLUE;
 
-			pDdr[2] = pDdr[0] + pDdr[1];
+			//pDdr[2] = pDdr[0] + pDdr[1];
 			
 			/* Interrupt ARM using sys evt 32 */
-			__R31 |= 0x00000021;
+			//__R31 |= 0x00000021;
 			
 			/* Clear interrupt event */
 			CT_INTC.SICR = 16;
