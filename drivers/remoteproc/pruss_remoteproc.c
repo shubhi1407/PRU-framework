@@ -892,10 +892,24 @@ static const struct pru_private_data *pru_rproc_get_private_data(
 /* Custome call backs to execute when virtqueues are kicked */
 static void custom_recv_cb(struct virtqueue *rvq)
 {
+	void *data;
+	//int rx_data[1]={0};
+	int rx_data[3]={0};
+	int i=0;
+	unsigned int len,vring_len;
+	vring_len = virtqueue_get_vring_size(rvq); //number of buffer in vring. specified in resource table
 	printk(KERN_INFO "Custom rx callback executed\n");
+	data = virtqueue_get_buf(rvq,&len);
+	memcpy(rx_data,data,len);
+	printk(KERN_INFO "length of data %d bytes",len);
+	for(i=0;i<3;i++) {
+		//rx_data[i]=*(int *)(data+i);
+
+		printk(KERN_INFO "Data recieved: %d\n",rx_data[i]);
+	}
 }
 
-static void custom_tx_cb(struct virtqueue *rvq)
+static void custom_tx_cb(struct virtqueue *svq)
 {
 	printk(KERN_INFO "Custom tx callback executed\n");
 }

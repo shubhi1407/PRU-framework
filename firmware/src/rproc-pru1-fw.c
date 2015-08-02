@@ -83,7 +83,7 @@ void main(){
 
 	/* Clear GPO pins */
 	__R30 &= 0x00000000;
-	int tx_data[10]={1,2,3,4,5,6,7,8,9,10};
+	int tx_data[3]={99,77,22};
 	void *ptr;
 	int i=0;
 
@@ -98,12 +98,13 @@ void main(){
 
 			ptr = pa_to_da(vring_desc->addr);
 
-			for(i=0;i<sizeof(tx_data)/sizeof(int);i++)
-				*(int *)(ptr+i)=tx_data[i]; //write to vring
+			//for(i=0;i<1;i++)
+				//*(int *)ptr=tx_data; //write to vring
+			memcpy(ptr,tx_data,sizeof(tx_data));
 
 			vring_desc->len = sizeof(tx_data);
 			vring_desc->flags &= ~VRING_DESC_F_NEXT;	/* no buffer is linked to this */
-			pru_vring_push_one(&tx_ring, 1);
+			pru_vring_push_one(&tx_ring, sizeof(tx_data)); //must be size of data written to buffer
 			
 			__R31 |= 0x00000021; //send sys ent 32
 			
