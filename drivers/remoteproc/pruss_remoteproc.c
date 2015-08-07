@@ -55,6 +55,9 @@
 /* sysevent reserved for kick from pru */
 #define VRING_EVT			   17
 
+/* Size of each vring buffer in bytes */
+#define VRING_BUF_SIZE		   512
+
 /* PRU_ICSS_PRU_CTRL registers */
 #define PRU_CTRL_CTRL		0x0000
 #define PRU_CTRL_STS		0x0004
@@ -892,20 +895,39 @@ static const struct pru_private_data *pru_rproc_get_private_data(
 /* Custome call backs to execute when virtqueues are kicked */
 static void custom_recv_cb(struct virtqueue *rvq)
 {
-	void *data;
-	//int rx_data[1]={0};
-	int rx_data[3]={0};
-	int i=0;
-	unsigned int len,vring_len;
-	vring_len = virtqueue_get_vring_size(rvq); //number of buffer in vring. specified in resource table
-	printk(KERN_INFO "Custom rx callback executed\n");
-	data = virtqueue_get_buf(rvq,&len);
-	memcpy(rx_data,data,len);
-	printk(KERN_INFO "length of data %d bytes",len);
-	for(i=0;i<3;i++) {
-		//rx_data[i]=*(int *)(data+i);
+	struct device *dev = &rvq->vdev->dev;
+	void *rx_data;
+	int messages=0;
+	int err;
+	struct scatterlist sg;
+	unsigned int len;
 
-		printk(KERN_INFO "Data recieved: %d\n",rx_data[i]);
+	/* number of buffer in vring. specified in resource table */
+	//vring_len = virtqueue_get_vring_size(rvq); 
+
+	printk(KERN_INFO "Custom rx callback executed\n");
+
+	/* Get pointer to data buffer from virtqueue and length of data (in bytes) written
+	 * into this buffer by remote processor
+	 */
+	rx_data = virtqueue_get_buf(rvq,&len);
+	
+	/* Loop until we get all buffers */
+	while(rx_data) {
+		/* Keeping track of the number of buffers written into by rproc. */
+		messages++;
+
+		printk(KERN_INFO "length of data %d bytes. Data :%d\n",len,*(int *)rx_data);
+		
+		sg_init_one(&sg, rx_data, VRING_BUF_SIZE);
+
+		/* Add consumed buffer back to virtqueue */
+		err = virtqueue_add_inbuf(rvq, &sg, 1, rx_data, GFP_KERNEL);
+		if (err < 0) {
+			dev_err(dev, "failed to add a virtqueue buffer: %d\n", err);
+			break;
+		}
+		rx_data = virtqueue_get_buf(rvq,&len);
 	}
 }
 

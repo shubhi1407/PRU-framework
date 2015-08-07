@@ -67,6 +67,7 @@ static inline void *pa_to_da(u32 pa)
 }
 
 void main(){
+	 __delay_cycles(200000000); //Wait for drivers to load on host processor
 	struct my_resource_table volatile * const rsc = (struct my_resource_table *)RSC_TABLE;
 
 	struct fw_rsc_vdev_vring tx_vring_rsc = rsc->rpmsg_vring0;
@@ -83,32 +84,35 @@ void main(){
 
 	/* Clear GPO pins */
 	__R30 &= 0x00000000;
-	int tx_data[3]={99,77,22};
+	int tx_data[1]={99};
 	void *ptr;
 	int i=0;
+
+	for(i=0;i<5;i++) {
+			if(pru_vring_buf_is_avail(&tx_ring)) {
+				
+				vring_desc = pru_vring_get_next_avail_desc(&tx_ring);
+
+				ptr = pa_to_da(vring_desc->addr);
+
+				memcpy(ptr,tx_data,sizeof(tx_data));
+
+				vring_desc->len = sizeof(tx_data);
+				vring_desc->flags |= VRING_DESC_F_NEXT;	/* no buffer is linked to this */
+				pru_vring_push_one(&tx_ring, sizeof(tx_data)); //must be size of data written to buffer
+				
+				//__delay_cycles(100000000);
+				
+			}
+		}
+		vring_desc->flags &= ~VRING_DESC_F_NEXT;	/* no buffer is linked to this */
+		__R31 |= 0x00000021; //send sys ent 32
 
 	/* Spin in loop until interrupt on HOST 1 is detected */
 	while(1){
 		//Read value from ddr
-		 __delay_cycles(200000000);
-
-		if(pru_vring_buf_is_avail(&tx_ring)) {
-			
-			vring_desc = pru_vring_get_next_avail_desc(&tx_ring);
-
-			ptr = pa_to_da(vring_desc->addr);
-
-			//for(i=0;i<1;i++)
-				//*(int *)ptr=tx_data; //write to vring
-			memcpy(ptr,tx_data,sizeof(tx_data));
-
-			vring_desc->len = sizeof(tx_data);
-			vring_desc->flags &= ~VRING_DESC_F_NEXT;	/* no buffer is linked to this */
-			pru_vring_push_one(&tx_ring, sizeof(tx_data)); //must be size of data written to buffer
-			
-			__R31 |= 0x00000021; //send sys ent 32
-			
-		}
+		
+		
 		/* Wait for sysevent 16 from ARM which mapped to HOST1 */
 		if (__R31 & HOST1_MASK){
 			TOGGLE_BLUE;
