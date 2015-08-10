@@ -60,9 +60,9 @@
 /* Size of each vring buffer in bytes */
 #define VRING_BUF_SIZE		   512
 
+#define RESET 				0x0000
 #define RX_COMPLETE			0x0001
 #define BUFFER_PENDING		0x0010
-
 
 /* PRU_ICSS_PRU_CTRL registers */
 #define PRU_CTRL_CTRL		0x0000
@@ -460,25 +460,30 @@ static ssize_t pru_misc_read(struct file *filp, char *page,
             size_t len, loff_t *offset)
 {
 	struct pru_rproc *pru = filp->private_data;
-	int *flags = &pru->vring_buffer->flags;
+	unsigned int *flags = &pru->vring_buffer->flags;
+	void *data;
 	/* bytes read from vring */
-    ssize_t bytes = sizeof(mesg);
+    ssize_t bytes;
     //flags = BUFFER_PENDING;
     /* Put process to sleep until data is available */
-    //wait_event_interruptible(vring_wait, (flag & BUFFER_PENDING)|| (flag & RX_COMPLETE))
-    printk(KERN_INFO "flag : %d\n",*flags);
+    wait_event_interruptible(vring_wait, ((*flags & BUFFER_PENDING)|| (*flags & RX_COMPLETE)));
+    data = pru->vring_buffer->vring_data_buf;
+    bytes = pru->vring_buffer->vring_data_size;
     if(*flags & BUFFER_PENDING) {
 
-    	if(copy_to_user(page, mesg, bytes))
+    	if(copy_to_user(page, data, bytes))
         	return -EFAULT;
 
         (*offset) += bytes;
-        *flags = RX_COMPLETE;
-        printk(KERN_INFO "flag new: %d\n",*flags);
+        *flags = RESET;
+       // printk(KERN_INFO "flag new: %d\n",*flags);
         return bytes;
 	}
-	else if(*flags & RX_COMPLETE)
+	else if(*flags & RX_COMPLETE) {
+		*flags = RESET;
 		return 0; //EOF
+	}
+		
 
 	return -EINVAL;
 
@@ -1005,12 +1010,13 @@ static void custom_recv_cb(struct virtqueue *rvq)
 		rx_data = virtqueue_get_buf(rvq,len);
 
 		/* Notify miscellaneous device file read functions that buffer is pending */
-		*flags |= BUFFER_PENDING & ~RX_COMPLETE;
+		*flags = BUFFER_PENDING & ~RX_COMPLETE;
 		wake_up_interruptible(&vring_wait);
+		*flags = 0;
 	}
 
 	/* All buffers have been consumed and added back to vring */
-	*flags |= ~BUFFER_PENDING & RX_COMPLETE;
+	*flags = ~BUFFER_PENDING & RX_COMPLETE;
 }
 
 static void custom_tx_cb(struct virtqueue *svq)
@@ -1147,8 +1153,8 @@ static int pru_rproc_probe(struct platform_device *pdev)
 		}
 
 		/* Initialize values */
-		pru->vring_buffer->vring_data_size=0;
-		pru->vring_buffer->flags=BUFFER_PENDING;
+		pru->vring_buffer->vring_data_size = 0;
+		pru->vring_buffer->flags = RESET;
 
 		/* Register the misc driver here */
 		pru->pru_core_miscdev.minor = MISC_DYNAMIC_MINOR;
