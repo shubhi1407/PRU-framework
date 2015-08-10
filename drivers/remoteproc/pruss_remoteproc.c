@@ -968,33 +968,31 @@ static const struct pru_private_data *pru_rproc_get_private_data(
 static void custom_recv_cb(struct virtqueue *rvq)
 {
 	struct device *dev = rvq->vdev->dev.parent;
-	//struct platform_device *pdev = to_platform_device(dev);
 	struct rproc *rproc = container_of(dev, struct rproc, dev);
 	struct pru_rproc *pru = rproc->priv;
-	void *rx_data;
-	int messages=0;
 	int err;
 	struct scatterlist sg;
+	void *rx_data = pru->vring_buffer->vring_data_buf;
+	unsigned int *flags = &pru->vring_buffer->flags;
 	unsigned int *len = &pru->vring_buffer->vring_data_size;
-	//unsigned int *len;
+	
+
 	/* number of buffer in vring. specified in resource table */
-	//vring_len = virtqueue_get_vring_size(rvq); 
-	dev_info(dev, "hello from device\n");
-	printk(KERN_INFO "Custom rx callback executed. PRU ID: %d\n",pru->id);
+	/* vring_len = virtqueue_get_vring_size(rvq); */
+	
+	//printk(KERN_INFO "Custom rx callback executed. PRU ID: %d\n",pru->id);
 
 	/* Get pointer to data buffer from virtqueue and length of data (in bytes) written
 	 * into this buffer by remote processor
 	 */
-	//pru->vr_buffer->vr_data_buf = virtqueue_get_buf(rvq,&pru->vr_buffer->vr_data_size);
 	rx_data = virtqueue_get_buf(rvq,len);
 	
 	/* Loop until we get all buffers */
 	while(rx_data) {
-		/* Keeping track of the number of buffers written into by rproc. */
-		messages++;
 
 		printk(KERN_INFO "length of data %d bytes. Data :%d\n",*len,*(int *)rx_data);
 		
+		/* Initialize scatter gather list */
 		sg_init_one(&sg, rx_data, VRING_BUF_SIZE);
 
 		/* Add consumed buffer back to virtqueue */
@@ -1003,8 +1001,16 @@ static void custom_recv_cb(struct virtqueue *rvq)
 			dev_err(dev, "failed to add a virtqueue buffer: %d\n", err);
 			break;
 		}
+		/* Get next buffer */
 		rx_data = virtqueue_get_buf(rvq,len);
+
+		/* Notify miscellaneous device file read functions that buffer is pending */
+		*flags |= BUFFER_PENDING & ~RX_COMPLETE;
+		wake_up_interruptible(&vring_wait);
 	}
+
+	/* All buffers have been consumed and added back to vring */
+	*flags |= ~BUFFER_PENDING & RX_COMPLETE;
 }
 
 static void custom_tx_cb(struct virtqueue *svq)
