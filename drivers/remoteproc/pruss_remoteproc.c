@@ -61,7 +61,7 @@
 #define VRING_BUF_SIZE		   512
 
 #define RESET 			0x0000
-#define RX_COMPLETE			0x0001
+#define RX_COMPLETE		0x0001
 #define BUFFER_PENDING		0x0010
 
 /* PRU_ICSS_PRU_CTRL registers */
