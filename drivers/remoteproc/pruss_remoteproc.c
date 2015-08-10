@@ -22,6 +22,7 @@
 #include <linux/bitops.h>
 #include <linux/debugfs.h>
 #include <linux/of_device.h>
+#include <linux/miscdevice.h>
 #include <linux/interrupt.h>
 #include <linux/pm_runtime.h>
 #include <linux/virtio.h>
@@ -33,6 +34,7 @@
 #include <asm/io.h>
 #include <linux/platform_data/remoteproc-pruss.h>
 #include <linux/delay.h>
+#include <linux/uaccess.h>
 
 #include "remoteproc_internal.h"
 #include "pruss_remoteproc.h"
@@ -57,6 +59,10 @@
 
 /* Size of each vring buffer in bytes */
 #define VRING_BUF_SIZE		   512
+
+#define RX_COMPLETE			0x0001
+#define BUFFER_PENDING		0x0010
+
 
 /* PRU_ICSS_PRU_CTRL registers */
 #define PRU_CTRL_CTRL		0x0000
@@ -113,6 +119,9 @@
 
 /* HIPIR register bit-fields */
 #define INTC_HIPIR_NONE_HINT	0x80000000
+
+/* vring wait queue */
+static DECLARE_WAIT_QUEUE_HEAD(vring_wait);
 
 /**
  * enum pruss_mem - PRUSS memory range identifiers
@@ -228,6 +237,18 @@ struct pruss {
 	struct hostevent host_event;
 };
 
+
+/* struct vring_buffer : structure for each vring buffer 
+ * @data_buf : va of vring buffer
+ * @data_size : size of data in bytes
+ * @flags : current state of buffer (BUFFER_PENDING,RX_COMPLETE)
+ */
+struct vring_buffer {
+	void *vring_data_buf;
+	unsigned int vring_data_size;
+	unsigned int flags;
+};
+
 /**
  * struct pru_rproc: PRU remoteproc structure
  * @id: id of the PRU core within the PRUSS
@@ -252,6 +273,8 @@ struct pru_rproc {
 	struct rproc *rproc;
 	struct mbox_chan *mbox;
 	struct mbox_client client;
+	struct vring_buffer *vring_buffer;
+	struct miscdevice pru_core_miscdev;
 	void __iomem *mem_va[PRU_MEM_MAX];
 	phys_addr_t mem_pa[PRU_MEM_MAX];
 	size_t mem_size[PRU_MEM_MAX];
@@ -263,6 +286,13 @@ struct pru_rproc {
 	u32 dbg_single_step;
 	u32 dbg_continuous;
 };
+
+
+/* Misc device to expose vring to userland
+ * Register this device only for the pru core which
+ * have a vdev published in its resource table 
+ */
+
 
 static inline u32 pruss_intc_read_reg(struct pruss *pruss, unsigned int reg)
 {
@@ -414,6 +444,48 @@ static const struct file_operations pru_rproc_debug_regs_ops = {
 	.read = seq_read,
 	.llseek	= seq_lseek,
 	.release = single_release,
+};
+
+static int pru_misc_open(struct inode *inode, struct file *filp)
+{
+	struct pru_rproc *pru = container_of(filp->private_data, struct pru_rproc, pru_core_miscdev);
+	filp->private_data = pru;
+	printk(KERN_INFO "file opened\n");
+	return 0;
+}
+
+char mesg[]="hello";
+/* Blocking I/O on the vring */
+static ssize_t pru_misc_read(struct file *filp, char *page, 
+            size_t len, loff_t *offset)
+{
+	struct pru_rproc *pru = filp->private_data;
+	int *flags = &pru->vring_buffer->flags;
+	/* bytes read from vring */
+    ssize_t bytes = sizeof(mesg);
+    //flags = BUFFER_PENDING;
+    /* Put process to sleep until data is available */
+    //wait_event_interruptible(vring_wait, (flag & BUFFER_PENDING)|| (flag & RX_COMPLETE))
+    printk(KERN_INFO "flag : %d\n",*flags);
+    if(*flags & BUFFER_PENDING) {
+
+    	if(copy_to_user(page, mesg, bytes))
+        	return -EFAULT;
+
+        (*offset) += bytes;
+        *flags = RX_COMPLETE;
+        printk(KERN_INFO "flag new: %d\n",*flags);
+        return bytes;
+	}
+	else if(*flags & RX_COMPLETE)
+		return 0; //EOF
+
+	return -EINVAL;
+
+}
+static const struct file_operations pru_misc_fops = {
+	.open = pru_misc_open,
+	.read = pru_misc_read,
 };
 
 /*
@@ -895,29 +967,33 @@ static const struct pru_private_data *pru_rproc_get_private_data(
 /* Custome call backs to execute when virtqueues are kicked */
 static void custom_recv_cb(struct virtqueue *rvq)
 {
-	struct device *dev = &rvq->vdev->dev;
+	struct device *dev = rvq->vdev->dev.parent;
+	//struct platform_device *pdev = to_platform_device(dev);
+	struct rproc *rproc = container_of(dev, struct rproc, dev);
+	struct pru_rproc *pru = rproc->priv;
 	void *rx_data;
 	int messages=0;
 	int err;
 	struct scatterlist sg;
-	unsigned int len;
-
+	unsigned int *len = &pru->vring_buffer->vring_data_size;
+	//unsigned int *len;
 	/* number of buffer in vring. specified in resource table */
 	//vring_len = virtqueue_get_vring_size(rvq); 
-
-	printk(KERN_INFO "Custom rx callback executed\n");
+	dev_info(dev, "hello from device\n");
+	printk(KERN_INFO "Custom rx callback executed. PRU ID: %d\n",pru->id);
 
 	/* Get pointer to data buffer from virtqueue and length of data (in bytes) written
 	 * into this buffer by remote processor
 	 */
-	rx_data = virtqueue_get_buf(rvq,&len);
+	//pru->vr_buffer->vr_data_buf = virtqueue_get_buf(rvq,&pru->vr_buffer->vr_data_size);
+	rx_data = virtqueue_get_buf(rvq,len);
 	
 	/* Loop until we get all buffers */
 	while(rx_data) {
 		/* Keeping track of the number of buffers written into by rproc. */
 		messages++;
 
-		printk(KERN_INFO "length of data %d bytes. Data :%d\n",len,*(int *)rx_data);
+		printk(KERN_INFO "length of data %d bytes. Data :%d\n",*len,*(int *)rx_data);
 		
 		sg_init_one(&sg, rx_data, VRING_BUF_SIZE);
 
@@ -927,7 +1003,7 @@ static void custom_recv_cb(struct virtqueue *rvq)
 			dev_err(dev, "failed to add a virtqueue buffer: %d\n", err);
 			break;
 		}
-		rx_data = virtqueue_get_buf(rvq,&len);
+		rx_data = virtqueue_get_buf(rvq,len);
 	}
 }
 
@@ -948,6 +1024,7 @@ static int pru_rproc_probe(struct platform_device *pdev)
 	struct rproc_vring *rvring=NULL;
 	struct mbox_client *client;
 	struct resource *res;
+	
 	vq_callback_t *vq_cbs[] = { custom_recv_cb, custom_tx_cb};
 	int i, ret;
 	const char *mem_names[PRU_MEM_MAX] = { "iram", "control", "debug" };
@@ -1032,6 +1109,7 @@ static int pru_rproc_probe(struct platform_device *pdev)
 	 */
 	wait_for_completion(&pru->rproc->firmware_loading_complete);
 	if (list_empty(&pru->rproc->rvdevs)) {
+		pru->vring_buffer = NULL;
 		dev_info(dev, "booting the PRU core manually\n");
 		ret = rproc_boot(pru->rproc);
 		if (ret) {
@@ -1043,14 +1121,43 @@ static int pru_rproc_probe(struct platform_device *pdev)
 	/* suppress unused function warning */
 	(void) pru_trigger_interrupt;
 
-	/* After registering vdev, assign rproc provided callback for vqs 
-	 * instead of using default callbacks provided in virtio_rpmsg_bus driver
-	 */
+	/* Setting up things related to pru which has vdev (or vring or virtqueue !)
+	 * or whatever you may choose to call it.
+	 */ 
 	if(!list_empty(&pru->rproc->rvdevs)) {
 		/* Some delay to allow virtio driver to probe.
 		 * XXX: Replace by wait_for_completion
 		 */
 		msleep(200);
+
+		/* Allocate memory for vring_buffer structure. This structure only carries
+		 * info about current buffer being read. Details of each vring is provided by
+		 * other structures (provided by linux vring implementation).
+		 */
+		pru->vring_buffer = devm_kzalloc(dev, sizeof(*pru->vring_buffer), GFP_KERNEL);
+		if (!pru->vring_buffer) {
+			dev_err(dev, "failed to allocate pruss\n");
+			return -ENOMEM;
+		}
+
+		/* Initialize values */
+		pru->vring_buffer->vring_data_size=0;
+		pru->vring_buffer->flags=BUFFER_PENDING;
+
+		/* Register the misc driver here */
+		pru->pru_core_miscdev.minor = MISC_DYNAMIC_MINOR;
+	    pru->pru_core_miscdev.name = rproc->name;
+	    pru->pru_core_miscdev.fops = &pru_misc_fops;
+
+	    ret = misc_register(&pru->pru_core_miscdev);
+	    if (ret) {
+	    	dev_err(dev, "Failed to register misc device for %s",rproc->name);
+	    	goto del_rproc;
+	    }
+
+	   	/* After registering vdev, assign remoteproc driver provided callback for vqs 
+	 	 * instead of using default callbacks provided in virtio_rpmsg_bus driver
+	 	 */
 		list_for_each_entry(rvdev, &pru->rproc->rvdevs, node){
 			// vrings are in the the order ->  rx,tx 
 			for (i = 0; i < MAX_VRINGS-1; i++) {
@@ -1093,6 +1200,9 @@ static int pru_rproc_remove(struct platform_device *pdev)
 	if (list_empty(&pru->rproc->rvdevs)) {
 		dev_info(dev, "stopping the manually booted PRU core\n");
 		rproc_shutdown(pru->rproc);
+	}
+	else {
+		misc_deregister(&pru->pru_core_miscdev);
 	}
 
 	mbox_free_channel(pru->mbox);
