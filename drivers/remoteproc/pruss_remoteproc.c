@@ -35,6 +35,9 @@
 #include <linux/platform_data/remoteproc-pruss.h>
 #include <linux/delay.h>
 #include <linux/uaccess.h>
+#include <linux/wait.h>
+#include <linux/completion.h>
+#include <linux/kfifo.h>
 
 #include "remoteproc_internal.h"
 #include "pruss_remoteproc.h"
@@ -122,6 +125,7 @@
 
 /* vring wait queue */
 static DECLARE_WAIT_QUEUE_HEAD(vring_wait);
+static DECLARE_COMPLETION(copy_complete);
 
 /**
  * enum pruss_mem - PRUSS memory range identifiers
@@ -275,6 +279,7 @@ struct pru_rproc {
 	struct mbox_client client;
 	struct vring_buffer *vring_buffer;
 	struct miscdevice pru_core_miscdev;
+	struct kfifo test;
 	void __iomem *mem_va[PRU_MEM_MAX];
 	phys_addr_t mem_pa[PRU_MEM_MAX];
 	size_t mem_size[PRU_MEM_MAX];
@@ -449,44 +454,46 @@ static const struct file_operations pru_rproc_debug_regs_ops = {
 static int pru_misc_open(struct inode *inode, struct file *filp)
 {
 	struct pru_rproc *pru = container_of(filp->private_data, struct pru_rproc, pru_core_miscdev);
+	unsigned int *flags = &pru->vring_buffer->flags;
 	filp->private_data = pru;
-	printk(KERN_INFO "file opened\n");
+	printk(KERN_INFO "file opened. Here flag is %d\n",*flags);
 	return 0;
 }
 
 char mesg[]="hello";
 /* Blocking I/O on the vring */
-static ssize_t pru_misc_read(struct file *filp, char *page, 
+static ssize_t pru_misc_read(struct file *filp, char __user *page, 
             size_t len, loff_t *offset)
 {
 	struct pru_rproc *pru = filp->private_data;
 	unsigned int *flags = &pru->vring_buffer->flags;
 	void *data;
+	unsigned int copied;
+	int ret;
 	/* bytes read from vring */
-    ssize_t bytes;
+   // ssize_t bytes;
     //flags = BUFFER_PENDING;
     /* Put process to sleep until data is available */
-    wait_event_interruptible(vring_wait, ((*flags & BUFFER_PENDING)|| (*flags & RX_COMPLETE)));
+    wait_event_interruptible(vring_wait, *flags==1);
     data = pru->vring_buffer->vring_data_buf;
-    bytes = pru->vring_buffer->vring_data_size;
-    if(*flags & BUFFER_PENDING) {
+    //bytes = pru->vring_buffer->vring_data_size;
+    printk(KERN_INFO "Woken up.data pointer %p\n",pru->vring_buffer->vring_data_buf);
+    if(*flags == 1) {
 
-    	if(copy_to_user(page, data, bytes))
-        	return -EFAULT;
-
-        (*offset) += bytes;
-        *flags = RESET;
+    	//if(copy_to_user(page, pru->vring_buffer->vring_data_buf, bytes))
+        //	return -EFAULT;
+    	ret = kfifo_to_user(&pru->test, page, len, &copied);
+        (*offset) += copied;
+        *flags = 0;
        // printk(KERN_INFO "flag new: %d\n",*flags);
-        return bytes;
+        return ret ? ret : copied;
 	}
 	else if(*flags & RX_COMPLETE) {
 		*flags = RESET;
 		return 0; //EOF
 	}
-		
-
+	
 	return -EINVAL;
-
 }
 static const struct file_operations pru_misc_fops = {
 	.open = pru_misc_open,
@@ -977,11 +984,10 @@ static void custom_recv_cb(struct virtqueue *rvq)
 	struct pru_rproc *pru = rproc->priv;
 	int err;
 	struct scatterlist sg;
-	void *rx_data = pru->vring_buffer->vring_data_buf;
+	void *rx_data;
 	unsigned int *flags = &pru->vring_buffer->flags;
 	unsigned int *len = &pru->vring_buffer->vring_data_size;
 	
-
 	/* number of buffer in vring. specified in resource table */
 	/* vring_len = virtqueue_get_vring_size(rvq); */
 	
@@ -991,9 +997,11 @@ static void custom_recv_cb(struct virtqueue *rvq)
 	 * into this buffer by remote processor
 	 */
 	rx_data = virtqueue_get_buf(rvq,len);
-	
+	pru->vring_buffer->vring_data_buf = rx_data;
 	/* Loop until we get all buffers */
-	while(rx_data) {
+	do {
+
+		kfifo_in(&pru->test,rx_data,*len);
 
 		printk(KERN_INFO "length of data %d bytes. Data :%d\n",*len,*(int *)rx_data);
 		
@@ -1009,14 +1017,16 @@ static void custom_recv_cb(struct virtqueue *rvq)
 		/* Get next buffer */
 		rx_data = virtqueue_get_buf(rvq,len);
 
-		/* Notify miscellaneous device file read functions that buffer is pending */
-		*flags = BUFFER_PENDING & ~RX_COMPLETE;
-		wake_up_interruptible(&vring_wait);
-		*flags = 0;
-	}
-
+		pru->vring_buffer->vring_data_buf = rx_data;
+		
+		//*flags = 0;
+	} while (rx_data);
+	/* Notify miscellaneous device file read functions that buffers are pending */
+	*flags = 1;
+	wake_up_interruptible(&vring_wait);
+	
 	/* All buffers have been consumed and added back to vring */
-	*flags = ~BUFFER_PENDING & RX_COMPLETE;
+	//*flags = ~BUFFER_PENDING & RX_COMPLETE;
 }
 
 static void custom_tx_cb(struct virtqueue *svq)
@@ -1152,6 +1162,13 @@ static int pru_rproc_probe(struct platform_device *pdev)
 			return -ENOMEM;
 		}
 
+	    ret = kfifo_alloc(&pru->test, 512*8*2, GFP_KERNEL);
+
+        if (ret) {
+                 printk(KERN_ERR "error kfifo_alloc\n");
+                 return ret;
+        }
+
 		/* Initialize values */
 		pru->vring_buffer->vring_data_size = 0;
 		pru->vring_buffer->flags = RESET;
@@ -1202,6 +1219,7 @@ static int pru_rproc_remove(struct platform_device *pdev)
 	
 	dev_info(dev, "%s: removing rproc %s\n", __func__, rproc->name);
 
+
 	/* Reset INTC config in structure */
 	for (i = 0; i < ARRAY_SIZE(pruss->sysev_to_ch); i++)
 		pruss->sysev_to_ch[i] = -1;
@@ -1217,6 +1235,8 @@ static int pru_rproc_remove(struct platform_device *pdev)
 		misc_deregister(&pru->pru_core_miscdev);
 	}
 
+	kfifo_free(&pru->test);
+
 	mbox_free_channel(pru->mbox);
 
 	rproc_del(rproc);
@@ -1230,14 +1250,51 @@ static int pru_rproc_remove(struct platform_device *pdev)
  * resource table
 */
 static int find_pru_with_vdev(struct device *dev, void *data)
-{	
-	struct platform_device *pdev = to_platform_device(dev);
-	struct rproc *rproc = platform_get_drvdata(pdev);
-	struct pru_rproc *pru = rproc->priv;
-	dev_info(dev, "Currently searching vdev for PRU-%d", pru->id);
-	if (list_empty(&pru->rproc->rvdevs))
-		return 0;
+ {	
+ 	struct platform_device *pdev = to_platform_device(dev);
+ 	struct rproc *rproc = platform_get_drvdata(pdev);
+ 	struct pru_rproc *pru = rproc->priv;
+ 	dev_info(dev, "Currently searching vdev for PRU-%d", pru->id);
+ 	if (list_empty(&pru->rproc->rvdevs))
+ 		return 0;
 	return 1; //vdev found
+}
+
+static irqreturn_t pruss_handler_worker(int irq,void *data)
+{
+	struct pruss *pruss = data;
+	struct platform_device *pdev = pruss->pdev;
+	struct device *dev = &pdev->dev;
+	struct device *pru_core_dev = NULL;
+	struct platform_device *pru_core_pdev = NULL;
+	struct rproc *rproc = NULL;
+	//struct pru_rproc *pru = NULL;
+	int ret;
+
+	printk(KERN_INFO "Thread Awakened\n");
+
+	/* Get dev of pru which has vdev */
+	pru_core_dev = device_find_child(dev,NULL,find_pru_with_vdev);
+	
+	/* Get platform deivce */
+	pru_core_pdev = to_platform_device(pru_core_dev);
+
+	rproc = platform_get_drvdata(pru_core_pdev);
+
+	//pru = rproc->priv;
+	//dev_info(pru_core_dev, "PRU-%d has vdev\n",pru->id);
+
+	/* Interrupt virtqueue */
+	ret = rproc_vq_interrupt(rproc, 0);
+
+	if (ret != IRQ_HANDLED) {
+		printk(KERN_INFO "vring irq not handled\n");
+		return IRQ_NONE;	
+	}
+
+	printk(KERN_INFO "vring irq handled.\n");
+	put_device(pru_core_dev);
+	return IRQ_HANDLED;	
 }
 
 /*
@@ -1249,24 +1306,11 @@ static irqreturn_t pruss_handler(int irq, void *data)
 	struct pruss *pruss = data;
 	struct platform_device *pdev = pruss->pdev;
 	struct device *dev = &pdev->dev;
-	struct device *pru_core_dev = NULL;
-	struct platform_device *pru_core_pdev = NULL;
-	struct rproc *rproc = NULL;
-	struct pru_rproc *pru = NULL;
 	u32 sys_evt, val;
 	int intr_bit = irq - pruss->irqs[0] + MIN_PRU_HOST_INT;
 	int intr_mask = (1 << intr_bit);
-	int ret;
+
 	static int evt_mask = MAX_PRU_SYS_EVENTS - 1;
-
-	/* Get dev of pru which has vdev */
-	pru_core_dev = device_find_child(dev,NULL,find_pru_with_vdev);
-	/* Get platform deivce */
-	pru_core_pdev = to_platform_device(pru_core_dev);
-
-	rproc = platform_get_drvdata(pru_core_pdev);
-	pru = rproc->priv;
-	dev_info(pru_core_dev, "PRU-%d has vdev\n",pru->id);
 
 	printk(KERN_INFO "irq recieved %d", irq);
 
@@ -1301,16 +1345,9 @@ static irqreturn_t pruss_handler(int irq, void *data)
 
 	/* Handle vring related sysevents */
 	if(sys_evt==VRING_EVT) {
-		
-		ret = rproc_vq_interrupt(rproc, 0);
-			if (ret == IRQ_HANDLED) {
-				printk(KERN_INFO "vring irq handled.\n");
-			}
-			else{
-				printk(KERN_INFO "vring irq not handled\n");
-			}
+		return IRQ_WAKE_THREAD;
+
 	}
-	put_device(pru_core_dev);
 
 	return IRQ_HANDLED;
 }
@@ -1643,7 +1680,7 @@ static int pruss_probe(struct platform_device *pdev)
 
 	for (i = 0; i < num_irqs; i++) {
 		irq = pruss->irqs[i];
-		err = devm_request_irq(dev, irq, pruss_handler, 0,
+		err = devm_request_threaded_irq(dev, irq, pruss_handler,pruss_handler_worker, 0,
 				       dev_name(dev), pruss);
 		if (err) {
 			dev_err(dev, "failed to register irq %d\n", irq);

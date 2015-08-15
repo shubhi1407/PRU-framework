@@ -59,7 +59,7 @@
 
 /* Mapping sysevts to a channel. Each pair contains a sysevt, channel */
 struct ch_map pru_intc_map[] = { {16, 1},
-		{17,3},{32,3},
+		{17,3},{18,4},
 			       };
 
 struct my_resource_table {
@@ -88,7 +88,7 @@ struct my_resource_table am335x_pru_remoteproc_ResourceTable = {
 		{ /* PRU_INTS version */
 		  0x0000,
 		  /* Channel-to-host mapping, 255 for unused */
-		  HOST_UNUSED, 1, 2, 3, HOST_UNUSED,
+		  HOST_UNUSED, 1, 2, 3, 4,
 		  HOST_UNUSED, HOST_UNUSED, HOST_UNUSED, HOST_UNUSED, HOST_UNUSED,
 		  /* Number of evts being mapped to channels */
 		  (sizeof(pru_intc_map) / sizeof(struct ch_map)),
