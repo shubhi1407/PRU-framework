@@ -462,12 +462,10 @@ static ssize_t pru_misc_read(struct file *filp, char __user *page,
 	unsigned int *flags = &pru->vring_buffer->flags;
 	unsigned int copied;
 	int ret;
-	/* bytes read from vring */
-   // ssize_t bytes;
-    //flags = BUFFER_PENDING;
+
     /* Put process to sleep until data is available */
     wait_event_interruptible(vring_wait, *flags & BUFFER_PENDING || *flags & RX_COMPLETE);
-    //bytes = pru->vring_buffer->vring_data_size;
+
     printk(KERN_INFO "Woken up. length of data %d bytes\n",pru->vring_buffer->vring_data_size);
     if(*flags & BUFFER_PENDING) {
 
