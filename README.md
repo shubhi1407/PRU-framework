@@ -117,7 +117,7 @@ This function can either be blocking or non-blocking depending on timeout provid
 @hostevt : EVTOUT0 – EVTOUT7 
 @callback : user provided callback function. Host event int is argument. No return.
 @TIMEOUT (in libpru.h): -1 for indefinite block
-			        >0 wait time before releasing poll
+						>0 wait time before releasing poll
 
 
 `int pruss_boot(char *fwname,int pru_num)`
