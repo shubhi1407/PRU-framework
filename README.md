@@ -130,7 +130,7 @@ Boots the PRU core.
 Returns 0 on success
 
 
-int pruss_shutdown(int pru_num)
+`int pruss_shutdown(int pru_num)`
 
 Shutdown PRU core.
 
