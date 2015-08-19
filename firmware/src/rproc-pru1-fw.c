@@ -84,35 +84,38 @@ void main(){
 
 	/* Clear GPO pins */
 	__R30 &= 0x00000000;
-	int tx_data[1]={99};
+	//int tx_data[1]={99};
 	void *ptr;
-	int i=0;
-
-	for(i=0;i<5;i++) {
-			if(pru_vring_buf_is_avail(&tx_ring)) {
-				
-				vring_desc = pru_vring_get_next_avail_desc(&tx_ring);
-
-				ptr = pa_to_da(vring_desc->addr);
-
-				memcpy(ptr,tx_data,sizeof(tx_data));
-
-				vring_desc->len = sizeof(tx_data);
-				vring_desc->flags |= VRING_DESC_F_NEXT;	/* no buffer is linked to this */
-				pru_vring_push_one(&tx_ring, sizeof(tx_data)); //must be size of data written to buffer
-				
-				//__delay_cycles(100000000);
-				
-			}
-		}
-		vring_desc->flags &= ~VRING_DESC_F_NEXT;	/* no buffer is linked to this */
-		__R31 |= 0x00000021; //send sys ent 32
+	int i=1;
+	int count=0;		
 
 	/* Spin in loop until interrupt on HOST 1 is detected */
 	while(1){
-		//Read value from ddr
 		
+		if(pru_vring_buf_is_avail(&tx_ring)) {
+			count++;
+			vring_desc = pru_vring_get_next_avail_desc(&tx_ring);
+
+			ptr = pa_to_da(vring_desc->addr);
+
+			memcpy(ptr,&i,sizeof(int));
+
+			vring_desc->len = sizeof(int);
+			vring_desc->flags |= VRING_DESC_F_NEXT;	/* no buffer is linked to this */
+			pru_vring_push_one(&tx_ring, sizeof(int)); //must be size of data written to buffer
+
+		}
 		
+		i++;
+
+		if(count==128) {
+			vring_desc->flags &= ~VRING_DESC_F_NEXT;	/* no buffer is linked to this */
+			__R31 |= 0x00000021; //send sys ent 32	
+			count=0;	
+			__delay_cycles(2000000);
+			
+		}		
+
 		/* Wait for sysevent 16 from ARM which mapped to HOST1 */
 		if (__R31 & HOST1_MASK){
 			TOGGLE_BLUE;
