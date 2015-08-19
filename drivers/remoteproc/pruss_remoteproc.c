@@ -466,7 +466,7 @@ static ssize_t pru_misc_read(struct file *filp, char __user *page,
     /* Put process to sleep until data is available */
     wait_event_interruptible(vring_wait, *flags & BUFFER_PENDING || *flags & RX_COMPLETE);
 
-    printk(KERN_INFO "Woken up. length of data %d bytes\n",pru->vring_buffer->vring_data_size);
+    //printk(KERN_INFO "Woken up. length of data %d bytes\n",pru->vring_buffer->vring_data_size);
     if(*flags & BUFFER_PENDING) {
 
     	ret = kfifo_to_user(&pru->vring_data, page, len, &copied);
@@ -991,7 +991,7 @@ static void custom_recv_cb(struct virtqueue *rvq)
 
 		kfifo_in(&pru->vring_data,rx_data,*len);
 
-		printk(KERN_INFO "length of data %d bytes. Data :%d\n",*len,*(int *)rx_data);
+	//printk(KERN_INFO "length of data %d bytes. Data :%d\n",*len,*(int *)rx_data);
 		
 		/* Initialize scatter gather list */
 		sg_init_one(&sg, rx_data, VRING_BUF_SIZE);
@@ -1032,6 +1032,7 @@ static int pru_rproc_probe(struct platform_device *pdev)
 	struct rproc_vring *rvring=NULL;
 	struct mbox_client *client;
 	struct resource *res;
+	int vring_len;
 	
 	vq_callback_t *vq_cbs[] = { custom_recv_cb, custom_tx_cb};
 	int i, ret;
@@ -1148,13 +1149,6 @@ static int pru_rproc_probe(struct platform_device *pdev)
 			return -ENOMEM;
 		}
 
-	    ret = kfifo_alloc(&pru->vring_data, 512*8*2, GFP_KERNEL);
-
-        if (ret) {
-                 printk(KERN_ERR "error kfifo_alloc\n");
-                 return ret;
-        }
-
 		/* Initialize values */
 		pru->vring_buffer->vring_data_size = 0;
 		pru->vring_buffer->flags &= RESET;
@@ -1177,9 +1171,20 @@ static int pru_rproc_probe(struct platform_device *pdev)
 			// vrings are in the the order ->  rx,tx 
 			for (i = 0; i < MAX_VRINGS-1; i++) {
 				rvring = &rvdev->vring[i];
-				rvring->vq->callback = vq_cbs[i];
-			}
-		} 
+				rvring->vq->callback = vq_cbs[i];				
+			}		
+		}
+
+		vring_len = virtqueue_get_vring_size(rvring->vq);
+	
+		/* Allocate kfifo of twice the size as vring 
+		 * i.e (512 bytes * 2 * number of buffers in vring) 
+		 * Each vring buffer is 512 bytes*/
+		ret = kfifo_alloc(&pru->vring_data, 512*2*vring_len, GFP_KERNEL);
+        if (ret) {
+                printk(KERN_ERR "error kfifo_alloc\n");
+                return ret;
+        } 
 	}
 
 	dev_info(dev, "PRU rproc node %s probed successfully\n", np->full_name);
@@ -1223,13 +1228,17 @@ static int pru_rproc_remove(struct platform_device *pdev)
 	else {
 		pru->vring_buffer->flags = RESET;
 		pru->vring_buffer->flags |= RX_COMPLETE;
+		dev_info(dev, "reached here 1\n");
 		wake_up_interruptible(&vring_wait);
+		dev_info(dev, "reached here 2\n");
 		misc_deregister(&pru->pru_core_miscdev);
+		dev_info(dev, "reached here 3\n");
 		kfifo_free(&pru->vring_data);
+		dev_info(dev, "reached here 4\n");
 	}
 
 	mbox_free_channel(pru->mbox);
-
+	dev_info(dev, "reached here 5\n");
 	rproc_del(rproc);
 	rproc_put(rproc);
 
@@ -1245,7 +1254,7 @@ static int find_pru_with_vdev(struct device *dev, void *data)
  	struct platform_device *pdev = to_platform_device(dev);
  	struct rproc *rproc = platform_get_drvdata(pdev);
  	struct pru_rproc *pru = rproc->priv;
- 	dev_info(dev, "Currently searching vdev for PRU-%d", pru->id);
+ 	//dev_info(dev, "Currently searching vdev for PRU-%d", pru->id);
  	if (list_empty(&pru->rproc->rvdevs))
  		return 0;
 	return 1; //vdev found
@@ -1262,7 +1271,7 @@ static irqreturn_t pruss_handler_worker(int irq,void *data)
 	//struct pru_rproc *pru = NULL;
 	int ret;
 
-	printk(KERN_INFO "Thread Awakened\n");
+	//printk(KERN_INFO "Thread Awakened\n");
 
 	/* Get dev of pru which has vdev */
 	pru_core_dev = device_find_child(dev,NULL,find_pru_with_vdev);
@@ -1283,7 +1292,7 @@ static irqreturn_t pruss_handler_worker(int irq,void *data)
 		return IRQ_NONE;	
 	}
 
-	printk(KERN_INFO "vring irq handled.\n");
+	//printk(KERN_INFO "vring irq handled.\n");
 	put_device(pru_core_dev);
 	return IRQ_HANDLED;	
 }
@@ -1303,7 +1312,7 @@ static irqreturn_t pruss_handler(int irq, void *data)
 
 	static int evt_mask = MAX_PRU_SYS_EVENTS - 1;
 
-	printk(KERN_INFO "irq recieved %d", irq);
+	//printk(KERN_INFO "irq recieved %d", irq);
 
 	/* check whether the interrupt can reach MPU */
 	if (!(intr_mask & pruss->data->host_events))
