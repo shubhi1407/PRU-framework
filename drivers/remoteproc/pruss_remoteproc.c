@@ -66,6 +66,8 @@
 #define RESET 			0x0000
 #define RX_COMPLETE		0x0001
 #define BUFFER_PENDING		0x0010
+#define KICK_ENABLED	0x0001
+#define KICK_DISABLED   0x0002
 
 /* PRU_ICSS_PRU_CTRL registers */
 #define PRU_CTRL_CTRL		0x0000
@@ -239,12 +241,14 @@ struct pruss {
 	int ch_to_host[MAX_PRU_CHANNELS];
 	struct pruss_message *msg,*last_msg;
 	struct hostevent host_event;
+	unsigned int vring_kicks_flag;
 };
 
 
 /* struct vring_buffer : structure for each vring buffer 
  * @vring_data_size : size of data in bytes (max can be 512 bytes)
  * @flags : current state of buffer (BUFFER_PENDING,RX_COMPLETE)
+ * @vring_kicks_flags : flag to enable/disble kicks from PRU
  */
 struct vring_buffer {
 	unsigned int vring_data_size;
@@ -1226,6 +1230,8 @@ static int pru_rproc_remove(struct platform_device *pdev)
 		rproc_shutdown(pru->rproc);
 	}
 	else {
+		pruss->vring_kicks_flag = KICK_DISABLED;
+		msleep(200);
 		pru->vring_buffer->flags = RESET;
 		pru->vring_buffer->flags |= RX_COMPLETE;
 		dev_info(dev, "reached here 1\n");
@@ -1344,7 +1350,7 @@ static irqreturn_t pruss_handler(int irq, void *data)
 				     1 << (sys_evt - 32));
 
 	/* Handle vring related sysevents */
-	if(sys_evt==VRING_KICK) {
+	if(sys_evt==VRING_KICK && (pruss->vring_kicks_flag & KICK_ENABLED)) {
 		return IRQ_WAKE_THREAD;
 	}
 
@@ -1607,6 +1613,7 @@ static int pruss_probe(struct platform_device *pdev)
 
 	pruss->pdev = pdev;
 	pruss->data = data;
+	pruss->vring_kicks_flag = KICK_ENABLED;
 
 	num_irqs = data->num_irqs;
 	pruss->irqs = devm_kzalloc(dev, sizeof(*pruss->irqs) * num_irqs,
