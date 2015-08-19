@@ -1230,21 +1230,19 @@ static int pru_rproc_remove(struct platform_device *pdev)
 		rproc_shutdown(pru->rproc);
 	}
 	else {
+		/* Disable further kicks from PRU and wait for pending buffers to be copied */
 		pruss->vring_kicks_flag = KICK_DISABLED;
 		msleep(200);
+
+		/* End kfifo_to_user using RX_COMPLETE flag */
 		pru->vring_buffer->flags = RESET;
 		pru->vring_buffer->flags |= RX_COMPLETE;
-		dev_info(dev, "reached here 1\n");
 		wake_up_interruptible(&vring_wait);
-		dev_info(dev, "reached here 2\n");
 		misc_deregister(&pru->pru_core_miscdev);
-		dev_info(dev, "reached here 3\n");
 		kfifo_free(&pru->vring_data);
-		dev_info(dev, "reached here 4\n");
 	}
 
 	mbox_free_channel(pru->mbox);
-	dev_info(dev, "reached here 5\n");
 	rproc_del(rproc);
 	rproc_put(rproc);
 
