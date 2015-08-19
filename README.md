@@ -82,7 +82,7 @@ Writes buffer pointed at by 'data' pointer to PRU memory.
 @bytelength : length of data to be copied (in bytes).  
 
 Returns 0 on success.  
-
+----
 
 `int pruss_read(unsigned const int mem_name, int wordoffset, int *data, size_t bytelength)` 
 
@@ -92,7 +92,7 @@ Reads into 'data' pointer from PRU memory.
 @bytelength : length of data to be copied (in bytes).  
 
 Returns 0 on success.  
-
+----
 
 `int pruss_interrupt(int sysevent)`  
 
@@ -101,14 +101,14 @@ Send user provided sysevent to PRU INTC.
 @sysevent : Sysevent number ( 0 – 63 )  
 
 Returns 0 on success.  
-
+----
 
 `bool check_device_status(int pru_num)` 
 
 @pru_num : PRU core id ( 0 or 1 )  
 
 Returns true if specified core is powered up. Otherwise false.  
-
+----
 
 `int hostevt_poll( int hostevt, void (*callback)(int) )` 
 
@@ -118,7 +118,7 @@ This function can either be blocking or non-blocking depending on timeout provid
 @callback : user provided callback function. Host event int is argument. No return.  
 @TIMEOUT (in libpru.h): -1 for indefinite block  
 						>0 wait time before releasing poll  
-
+----
 
 `int pruss_boot(char *fwname,int pru_num)`
 
@@ -128,7 +128,7 @@ Boots the PRU core.
 @pru_num: PRU0 / PRU1  
 
 Returns 0 on success
-
+----
 
 `int pruss_shutdown(int pru_num)`
 
