@@ -34,6 +34,7 @@
 #include <pru_cfg.h>
 #include <pru_intc.h>
 #include "resource_table_0.h"
+#include <pru_vring.h>
 // PRU Core 1
 #define PRU1
 
@@ -51,7 +52,9 @@ volatile far pruIntc CT_INTC __attribute__((cregister("PRU_INTC", far), peripher
 #define PRU0_PRU1_EVT		(16)
 #define PRU0_PRU1_TRIGGER	(__R31 = (PRU0_PRU1_EVT - 16) | (1 << 5))
 
+
 void main(){
+	
 	/* Configure GPI and GPO as Mode 0 (Direct Connect) */
 	CT_CFG.GPCFG0 = 0x0000;
 

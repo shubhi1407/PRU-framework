@@ -48,8 +48,8 @@
  * Sizes of the virtqueues (expressed in number of buffers supported,
  * and must be power of 2)
  */
-#define PRU_RPMSG_VQ0_SIZE	2
-#define PRU_RPMSG_VQ1_SIZE	2
+#define PRU_RPMSG_VQ0_SIZE	256
+#define PRU_RPMSG_VQ1_SIZE	256
 
 /* flip up bits whose indices represent features we support */
 #define RPMSG_PRU_C0_FEATURES	1
